@@ -832,6 +832,7 @@ class Worker:
                         if not cooldown or time() > cooldown / 1000:
                             spinning = ensure_future(self.spin_pokestop(pokestop))
                 else:
+                    await self.get_gym_details(fort)
                     DB_PROC.add(self.normalize_gym(fort))
 
             if config.MORE_POINTS or bootstrap:
@@ -906,6 +907,30 @@ class Worker:
             return hashes_left > usable_per_second * seconds_left + spare
         except (TypeError, KeyError):
             return False
+
+    async def get_gym_details(self, gym):
+        self.error_code = 'G'
+        gym_location = gym['latitude'], gym['longitude']
+        distance = get_distance(self.location, gym_location)
+
+        if distance > 400:
+            return False
+
+        # randomize location up to ~1.4 meters
+        self.simulate_jitter(amount=0.00001)
+
+        version = '5702'
+
+        request = self.api.create_request()
+        request.get_gym_details(gym_id = gym['id'],
+                            player_latitude = self.location[0],
+                            player_longitude = self.location[1],
+                            gym_latitude = gym['latitude'],
+                            gym_longitude = gym['longitude'],
+                            client_version = version)
+        responses = await self.call(request, action=1)
+
+        print(responses.get('GET_GYM_DETAILS'))
 
     async def spin_pokestop(self, pokestop):
         self.error_code = '$'
