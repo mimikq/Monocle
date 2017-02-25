@@ -1,17 +1,17 @@
-from functools import partial
-from pogo_async import PGoApi, exceptions as ex
-from pogo_async.auth_ptc import AuthPtc
-from pogo_async.utilities import get_cell_ids, HAVE_POGEO
-from pogo_async.hash_server import HashServer
 from asyncio import sleep, Lock, Semaphore, ensure_future, gather
 from random import choice, randint, uniform, triangular
 from time import time, monotonic
 from array import typecodes
 from queue import Empty
 
+from pogo_async import PGoApi, exceptions as ex
+from pogo_async.auth_ptc import AuthPtc
+from pogo_async.utilities import get_cell_ids, HAVE_POGEO
+from pogo_async.hash_server import HashServer
+
 from .db import SIGHTING_CACHE, MYSTERY_CACHE, Bounds
 from .utils import random_sleep, round_coords, load_pickle, load_accounts, get_device_info, get_spawn_id, get_distance, get_start_coords, Units, randomize_point
-from .shared import get_logger, LOOP, SessionManager
+from .shared import get_logger, LOOP, SessionManager, run_threaded
 from .spawns import SPAWNS
 from .db_proc import DB_PROC
 from . import config, avatar
@@ -538,7 +538,7 @@ class Worker:
                 self.last_request = time()
                 if err != e:
                     err = e
-                    message = repr(e)
+                    message = str(e)
                     if 'GetMapObjects' in message:
                         message = '{} {:.2f} seconds since last GMO.'.format(
                             message, self.last_request - self.last_gmo)
@@ -707,9 +707,9 @@ class Worker:
         except (ex.MalformedResponseException, ex.UnexpectedResponseException) as e:
             self.log.warning('{} Giving up.', e)
             self.error_code = 'MALFORMED RESPONSE'
-        except EmptyGMOException:
+        except EmptyGMOException as e:
             self.error_code = '0'
-            self.log.warning('Empty GMO response.')
+            self.log.warning('Empty GetMapObjects response for {}. Speed: {:.2f}', self.username, self.speed)
         except ex.HashServerException as e:
             self.log.warning('{}', e)
             self.error_code = 'HASHING ERROR'
@@ -780,7 +780,7 @@ class Worker:
                 time_of_day = map_objects['time_of_day']
             except KeyError:
                 self.empty_visits += 1
-                raise EmptyGMOException('Empty GetMapObjects response for {}. Speed: {:.2f}'.format(self.username, self.speed))
+                raise EmptyGMOException
 
         if config.ITEM_LIMITS and self.bag_full():
             await self.clean_bag()
@@ -1198,11 +1198,15 @@ class Worker:
         await self.new_account(lock)
 
     async def new_account(self, lock=False):
-        captcha = False
-        if config.CAPTCHA_KEY and self.extra_queue.empty() and not self.captcha_queue.empty():
+        if (config.CAPTCHA_KEY
+                and (config.FAVOR_CAPTCHA or self.extra_queue.empty())
+                and not self.captcha_queue.empty()):
             self.account = self.captcha_queue.get()
         else:
-            self.account = await LOOP.run_in_executor(None, self.extra_queue.get)
+            try:
+                self.account = self.extra_queue.get_nowait()
+            except Empty:
+                self.account = await run_threaded(self.extra_queue.get)
         self.username = self.account['username']
         try:
             self.location = self.account['location'][:2]
