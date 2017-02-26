@@ -125,7 +125,9 @@ class Worker:
         self.item_capacity = 350
         self.visits = 0
         self.pokestops = config.SPIN_POKESTOPS
+        self.gyms = config.GET_GYM_DETAILS
         self.next_spin = 0
+        self.next_gym = 0
 
     def initialize_api(self):
         device_info = get_device_info(self.account)
@@ -812,6 +814,7 @@ class Worker:
                 DB_PROC.add(normalized)
 
             spinning = None
+            gymming = None
             for fort in map_cell.get('forts', []):
                 if not fort.get('enabled'):
                     continue
@@ -832,8 +835,11 @@ class Worker:
                         if not cooldown or time() > cooldown / 1000:
                             spinning = ensure_future(self.spin_pokestop(pokestop))
                 else:
-                    await self.get_gym_details(fort)
-                    DB_PROC.add(self.normalize_gym(fort))
+                    gym = self.normalize_gym(fort)
+                    if (self.gyms and time() > self.next_gym and self.smart_throttle(1)
+                            and (not gymming or gymming.done())):
+                        gymming = ensure_future(self.get_gym_details(gym))
+                    DB_PROC.add(gym)
 
             if config.MORE_POINTS or bootstrap:
                 for point in map_cell.get('spawn_points', []):
@@ -889,6 +895,9 @@ class Worker:
         if spinning:
             await spinning
 
+        if gymming:
+            await gymming
+
         self.update_accounts_dict()
         LOOP.call_later(60, self.unset_code)
         return pokemon_seen + forts_seen + points_seen
@@ -910,7 +919,7 @@ class Worker:
 
     async def get_gym_details(self, gym):
         self.error_code = 'G'
-        gym_location = gym['latitude'], gym['longitude']
+        gym_location = gym['lat'], gym['lon']
         distance = get_distance(self.location, gym_location)
 
         if distance > 400:
@@ -922,15 +931,27 @@ class Worker:
         version = '5702'
 
         request = self.api.create_request()
-        request.get_gym_details(gym_id = gym['id'],
+        request.get_gym_details(gym_id = gym['external_id'],
                             player_latitude = self.location[0],
                             player_longitude = self.location[1],
-                            gym_latitude = gym['latitude'],
-                            gym_longitude = gym['longitude'],
+                            gym_latitude = gym['lat'],
+                            gym_longitude = gym['lon'],
                             client_version = version)
         responses = await self.call(request, action=1)
 
+        name = responses.get('GET_GYM_DETAILS', {}).get('name')
+        result = responses.get('GET_GYM_DETAILS', {}).get('result', 0)
+        if result == 1:
+            self.log.info('GET_GYM_DETAILS {}.', name)
+        elif result == 2:
+            self.log.info('The server said {} was out of gym details range. {:.1f}m {:.1f}{}',
+                name, distance, self.speed, UNIT_STRING)
+
+        self.next_gym = time() + config.GYM_COOLDOWN
+        self.error_code = '!'
+        
         print(responses.get('GET_GYM_DETAILS'))
+        return responses
 
     async def spin_pokestop(self, pokestop):
         self.error_code = '$'
