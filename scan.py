@@ -22,7 +22,6 @@ from concurrent.futures import TimeoutError
 
 import time
 
-<<<<<<< HEAD
 # Check whether config has all necessary attributes
 _required = (
     'DB_ENGINE',
@@ -31,7 +30,7 @@ _required = (
     'MAP_END'
 )
 for setting_name in _required:
-    if not hasattr(config, setting_name):
+    if not hasattr(conf, setting_name):
         raise AttributeError('Please set "{}" in config'.format(setting_name))
 # Set defaults for missing config options
 _optional = {
@@ -76,59 +75,59 @@ _optional = {
     'FAVOR_CAPTCHA': True
 }
 for setting_name, default in _optional.items():
-    if not hasattr(config, setting_name):
-        setattr(config, setting_name, default)
+    if not hasattr(conf, setting_name):
+        setattr(conf, setting_name, default)
 del (_optional, _required)
 
 # validate PROXIES input and cast to set if needed
-if config.PROXIES:
-    if isinstance(config.PROXIES, (tuple, list)):
-        config.PROXIES = set(config.PROXIES)
-    elif isinstance(config.PROXIES, str):
-        config.PROXIES = {config.PROXIES}
-    elif not isinstance(config.PROXIES, set):
+if conf.PROXIES:
+    if isinstance(conf.PROXIES, (tuple, list)):
+        conf.PROXIES = set(conf.PROXIES)
+    elif isinstance(conf.PROXIES, str):
+        conf.PROXIES = {conf.PROXIES}
+    elif not isinstance(conf.PROXIES, set):
         raise ValueError('PROXIES must be either a list, set, tuple, or str.')
 
 # ensure that user's latitudes and longitudes are different
-if (config.MAP_START[0] == config.MAP_END[0]
-        or config.MAP_START[1] == config.MAP_END[1]):
+if (conf.MAP_START[0] == conf.MAP_END[0]
+        or conf.MAP_START[1] == conf.MAP_END[1]):
     raise ValueError('The latitudes and longitudes of your MAP_START and MAP_END must differ.')
 
 # disable bag cleaning if not spinning PokéStops
-if config.ITEM_LIMITS and not config.SPIN_POKESTOPS:
-    config.ITEM_LIMITS = None
+if conf.ITEM_LIMITS and not conf.SPIN_POKESTOPS:
+    conf.ITEM_LIMITS = None
 
 # ensure that numbers are valid
 try:
-    if config.SCAN_DELAY < 10:
+    if conf.SCAN_DELAY < 10:
         raise ValueError('SCAN_DELAY must be at least 10.')
 except (TypeError, AttributeError):
-    config.SCAN_DELAY = 10
+    conf.SCAN_DELAY = 10
 try:
-    if config.SIMULTANEOUS_LOGINS < 1:
+    if conf.SIMULTANEOUS_LOGINS < 1:
         raise ValueError('SIMULTANEOUS_LOGINS must be at least 1.')
 except (TypeError, AttributeError):
-    config.SIMULTANEOUS_LOGINS = 4
+    conf.SIMULTANEOUS_LOGINS = 4
 try:
-    if config.SIMULTANEOUS_SIMULATION < 1:
+    if conf.SIMULTANEOUS_SIMULATION < 1:
         raise ValueError('SIMULTANEOUS_SIMULATION must be at least 1.')
 except (TypeError, AttributeError):
-    config.SIMULTANEOUS_SIMULATION = config.SIMULTANEOUS_LOGINS
+    conf.SIMULTANEOUS_SIMULATION = conf.SIMULTANEOUS_LOGINS
 
-if config.ENCOUNTER not in (None, 'notifying', 'all'):
+if conf.ENCOUNTER not in (None, 'notifying', 'all'):
     raise ValueError("Valid ENCOUNTER settings are: None, 'notifying', and 'all'")
 
-if config.DIRECTORY is None:
+if conf.DIRECTORY is None:
     if exists(join('..', 'pickles')):
-        config.DIRECTORY = '..'
+        conf.DIRECTORY = '..'
     else:
-        config.DIRECTORY = ''
+        conf.DIRECTORY = ''
 
-if config.FORCED_KILL is True:
-    config.FORCED_KILL = ('0.57.2', '0.55.0', '0.53.0', '0.53.1', '0.53.2')
+if conf.FORCED_KILL is True:
+    conf.FORCED_KILL = ('0.57.2', '0.55.0', '0.53.0', '0.53.1', '0.53.2')
 
-if not config.COROUTINES_LIMIT:
-    config.COROUTINES_LIMIT = config.GRID[0] * config.GRID[1]
+if not conf.COROUTINES_LIMIT:
+    conf.COROUTINES_LIMIT = conf.GRID[0] * conf.GRID[1]
 from sqlalchemy.exc import DBAPIError
 from aiopogo import close_sessions, activate_hash_server
 

@@ -17,6 +17,7 @@ from .shared import get_logger, LOOP, SessionManager, run_threaded, ACCOUNTS
 from .spawns import SPAWNS
 from .db_proc import DB_PROC
 from . import avatar, sanitized as conf
+import json
 
 if conf.NOTIFY:
     from .notification import Notifier
@@ -106,7 +107,7 @@ class Worker:
         self.item_capacity = 350
         self.visits = 0
         self.pokestops = conf.SPIN_POKESTOPS
-        self.gyms = config.GET_GYM_DETAILS
+        self.gyms = conf.GET_GYM_DETAILS
         self.next_spin = 0
         self.next_gym = 0
         self.handle = HandleStub()
@@ -786,7 +787,7 @@ class Worker:
                     gym = self.normalize_gym(fort)
                     if (self.gyms and time() > self.next_gym and self.smart_throttle(1)
                             and (not gymming or gymming.done())):
-                        gymming = ensure_future(self.get_gym_details(gym))
+                        gymming = LOOP.create_task(self.get_gym_details(gym))
                     DB_PROC.add(gym)
 
             if conf.MORE_POINTS or bootstrap:
@@ -862,7 +863,7 @@ class Worker:
         gym_location = gym['lat'], gym['lon']
         distance = get_distance(self.location, gym_location)
 
-        if distance > 400:
+        if distance > 150:
             return False
 
         # randomize location up to ~1.4 meters
@@ -887,10 +888,10 @@ class Worker:
             self.log.info('The server said {} was out of gym details range. {:.1f}m {:.1f}{}',
                 name, distance, self.speed, UNIT_STRING)
 
-        self.next_gym = time() + config.GYM_COOLDOWN
+        self.next_gym = time() + conf.GYM_COOLDOWN
         self.error_code = '!'
         
-        print(responses.get('GET_GYM_DETAILS'))
+        print(responses.get('GET_GYM_DETAILS', {}))
         return responses
 
     async def spin_pokestop(self, pokestop):
