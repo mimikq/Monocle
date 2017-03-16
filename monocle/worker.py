@@ -1,49 +1,33 @@
-from asyncio import sleep, Lock, Semaphore, ensure_future, gather
+from asyncio import sleep, Lock, Semaphore, gather
 from random import choice, randint, uniform, triangular
 from time import time, monotonic
-from array import typecodes
 from queue import Empty
+from itertools import cycle
+from sys import exit
+from concurrent.futures import CancelledError
 
-from pogo_async import PGoApi, exceptions as ex
-from pogo_async.auth_ptc import AuthPtc
-from pogo_async.utilities import get_cell_ids, HAVE_POGEO
-from pogo_async.hash_server import HashServer
+from aiopogo import PGoApi, exceptions as ex
+from aiopogo.auth_ptc import AuthPtc
+from aiopogo.hash_server import HashServer
+from pogeo import get_distance
 
 from .db import SIGHTING_CACHE, MYSTERY_CACHE, Bounds
-from .utils import random_sleep, round_coords, load_pickle, load_accounts, get_device_info, get_spawn_id, get_distance, get_start_coords, Units, randomize_point
-from .shared import get_logger, LOOP, SessionManager, run_threaded
+from .utils import round_coords, load_pickle, get_device_info, get_spawn_id, get_start_coords, Units, randomize_point
+from .shared import get_logger, LOOP, SessionManager, run_threaded, ACCOUNTS
 from .spawns import SPAWNS
 from .db_proc import DB_PROC
-from . import config, avatar
+from . import avatar, sanitized as conf
 
-try:
-    import _thread
-except ImportError as e:
-    if config.FORCED_KILL:
-        raise OSError('Your platform does not support _thread so FORCED_KILL will not work.') from e
-    import _dummy_thread as _thread
-
-if config.NOTIFY:
+if conf.NOTIFY:
     from .notification import Notifier
 
-if config.CONTROL_SOCKS:
-    from stem import Signal
-    from stem.control import Controller
-    import stem.util.log
-    stem.util.log.get_logger().level = 40
-    CIRCUIT_TIME = dict()
-    CIRCUIT_FAILURES = dict()
-    for proxy in config.PROXIES:
-        CIRCUIT_TIME[proxy] = monotonic()
-        CIRCUIT_FAILURES[proxy] = 0
+if conf.CACHE_CELLS:
+    from aiopogo.utilities import get_cell_ids
+    from array import typecodes
 else:
-    CIRCUIT_TIME = None
-    CIRCUIT_FAILURES = None
+    from pogeo import get_cell_ids
 
-if not hasattr(config, 'CACHE_CELLS'):
-    config.CACHE_CELLS = not HAVE_POGEO
-
-_unit = getattr(Units, config.SPEED_UNIT.lower())
+_unit = getattr(Units, conf.SPEED_UNIT.lower())
 if _unit is Units.miles:
     SPINNING_SPEED_LIMIT = 21
     UNIT_STRING = "MPH"
@@ -55,6 +39,8 @@ elif _unit is Units.meters:
     UNIT_STRING = "m/h"
 _UNIT = _unit.value
 
+VERSIONS = ('0.57.4', '0.57.3', '0.57.2', '0.55.0')
+
 
 class Worker:
     """Single worker walking on the map"""
@@ -62,23 +48,22 @@ class Worker:
     download_hash = "7b9c5056799a2c5c7d48a62c497736cbcf8c4acb"
     g = {'seen': 0, 'captchas': 0}
 
-    accounts = load_accounts()
-    if config.CACHE_CELLS:
+    if conf.CACHE_CELLS:
         cell_ids = load_pickle('cells') or {}
         COMPACT = 'Q' in typecodes
 
-    login_semaphore = Semaphore(config.SIMULTANEOUS_LOGINS)
-    sim_semaphore = Semaphore(config.SIMULTANEOUS_SIMULATION)
+    login_semaphore = Semaphore(conf.SIMULTANEOUS_LOGINS, loop=LOOP)
+    sim_semaphore = Semaphore(conf.SIMULTANEOUS_SIMULATION, loop=LOOP)
 
-    proxies = None
-    proxy = None
-    if config.PROXIES:
-        if len(config.PROXIES) == 1:
-            proxy = config.PROXIES.pop()
-        else:
-            proxies = config.PROXIES.copy()
+    MULTIPROXY = False
+    if conf.PROXIES:
+        if len(conf.PROXIES) > 1:
+            MULTIPROXY = True
+        proxies = cycle(conf.PROXIES)
+    else:
+        proxies = None
 
-    if config.NOTIFY:
+    if conf.NOTIFY:
         notifier = Notifier()
 
     def __init__(self, worker_no):
@@ -106,28 +91,25 @@ class Worker:
         # last time of a GetMapObjects request
         self.last_gmo = self.last_request
         self.items = self.account.get('items', {})
-        self.player_level = self.account.get('player_level')
+        self.player_level = self.account.get('level')
         self.num_captchas = 0
         self.eggs = {}
         self.unused_incubators = []
-        # API setup
-        if self.proxies:
-            self.new_proxy(set_api=False)
         self.initialize_api()
         # State variables
-        self.busy = Lock()
+        self.busy = Lock(loop=LOOP)
         # Other variables
         self.after_spawn = None
         self.speed = 0
-        self.account_start = None
         self.total_seen = 0
         self.error_code = 'INIT'
         self.item_capacity = 350
         self.visits = 0
-        self.pokestops = config.SPIN_POKESTOPS
+        self.pokestops = conf.SPIN_POKESTOPS
         self.gyms = config.GET_GYM_DETAILS
         self.next_spin = 0
         self.next_gym = 0
+        self.handle = HandleStub()
 
     def initialize_api(self):
         device_info = get_device_info(self.account)
@@ -135,14 +117,12 @@ class Worker:
         self.account_seen = 0
 
         self.api = PGoApi(device_info=device_info)
-        if config.HASH_KEY:
-            self.api.activate_hash_server(config.HASH_KEY)
         self.api.set_position(*self.location, self.altitude)
-        if self.proxy:
-            self.api.set_proxy(self.proxy)
+        if self.proxies:
+            self.api.set_proxy(next(self.proxies))
         try:
             if self.account['provider'] == 'ptc' and 'auth' in self.account:
-                self.api._auth_provider = AuthPtc(username=self.username, password=self.account['password'], timeout=config.LOGIN_TIMEOUT)
+                self.api._auth_provider = AuthPtc(username=self.username, password=self.account['password'], timeout=conf.LOGIN_TIMEOUT)
                 self.api._auth_provider._access_token = self.account['auth']
                 self.api._auth_provider.set_refresh_token(self.account['refresh'])
                 self.api._auth_provider._access_token_expiry = self.account['expiry']
@@ -151,32 +131,16 @@ class Worker:
         except KeyError:
             pass
 
-    def new_proxy(self, set_api=True):
-        self.proxy = self.proxies.pop()
-        if not self.proxies:
-            self.proxies.update(config.PROXIES)
-        if set_api:
-            self.api.set_proxy(self.proxy)
-
-    def swap_circuit(self, reason=''):
-        time_passed = monotonic() - CIRCUIT_TIME[self.proxy]
-        if time_passed > 180:
-            socket = config.CONTROL_SOCKS[self.proxy]
-            with Controller.from_socket_file(path=socket) as controller:
-                controller.authenticate()
-                controller.signal(Signal.NEWNYM)
-            CIRCUIT_TIME[self.proxy] = monotonic()
-            CIRCUIT_FAILURES[self.proxy] = 0
-            self.log.warning('Changed circuit on {} due to {}.', self.proxy, reason)
-        else:
-            self.log.info('Skipped changing circuit on {} because it was '
-                          'changed {} seconds ago.', self.proxy, time_passed)
+    def swap_proxy(self):
+        proxy = self.api.proxy
+        while proxy == self.api.proxy:
+            self.api.set_proxy(next(self.proxies))
 
     async def login(self, reauth=False):
         """Logs worker in and prepares for scanning"""
         self.log.info('Trying to log in')
 
-        for attempt in range(-1, config.MAX_RETRIES):
+        for attempt in range(-1, conf.MAX_RETRIES):
             try:
                 self.error_code = '»'
                 async with self.login_semaphore:
@@ -184,12 +148,12 @@ class Worker:
                     await self.api.set_authentication(
                         username=self.username,
                         password=self.account['password'],
-                        provider=self.account.get('provider', 'ptc'),
-                        timeout=config.LOGIN_TIMEOUT
+                        provider=self.account.get('provider') or 'ptc',
+                        timeout=conf.LOGIN_TIMEOUT
                     )
             except (ex.AuthTimeoutException, ex.AuthConnectionException) as e:
                 err = e
-                await sleep(2)
+                await sleep(2, loop=LOOP)
             else:
                 err = None
                 break
@@ -204,70 +168,20 @@ class Worker:
             raise err
 
         self.error_code = '°'
-        version = 5702
+        version = 5704
         async with self.sim_semaphore:
             self.error_code = 'APP SIMULATION'
-            if config.APP_SIMULATION:
+            if conf.APP_SIMULATION:
                 await self.app_simulation_login(version)
             else:
                 await self.download_remote_config(version)
 
         self.error_code = None
-        self.account_start = time()
         return True
 
-    async def download_remote_config(self, version):
+    async def get_player(self):
         request = self.api.create_request()
-        request.download_remote_config_version(platform=1, app_version=version)
-        responses = await self.call(request, stamp=False, buddy=False, settings=True, dl_hash=False)
-
-        inventory_items = responses.get('GET_INVENTORY', {}).get('inventory_delta', {}).get('inventory_items', [])
-        for item in inventory_items:
-            player_stats = item.get('inventory_item_data', {}).get('player_stats', {})
-            if player_stats:
-                self.player_level = player_stats.get('level') or self.player_level
-                break
-        await random_sleep(.78, .95)
-
-    async def set_avatar(self, tutorial=False):
-        plater_avatar = avatar.new()
-        request = self.api.create_request()
-        request.list_avatar_customizations(
-            avatar_type=plater_avatar['avatar'],
-            slot=tuple(),
-            filters=(2,)
-        )
-        await self.call(request, buddy=not tutorial, action=5)
-        await random_sleep(7, 14)
-
-        request = self.api.create_request()
-        request.set_avatar(player_avatar=plater_avatar)
-        await self.call(request, buddy=not tutorial, action=2)
-
-        if tutorial:
-            await random_sleep(.5, 4)
-
-            request = self.api.create_request()
-            request.mark_tutorial_complete(tutorials_completed=1)
-            await self.call(request, buddy=False)
-
-        await random_sleep(.5, 1)
-
-        request = self.api.create_request()
-        request.get_player_profile()
-        await self.call(request, action=1)
-
-    async def app_simulation_login(self, version):
-        self.log.info('Starting RPC login sequence (iOS app simulation)')
-
-        # empty request
-        request = self.api.create_request()
-        await self.call(request, chain=False)
-        await random_sleep(.43, .97)
-
-        # request 1: get_player
-        request = self.api.create_request()
-        request.get_player(player_locale=config.PLAYER_LOCALE)
+        request.get_player(player_locale=conf.PLAYER_LOCALE)
 
         responses = await self.call(request, chain=False)
 
@@ -285,8 +199,61 @@ class Worker:
                 self.account['created'] = player_data['creation_timestamp_ms'] / 1000
         except (KeyError, TypeError, AttributeError):
             pass
+        return tutorial_state
 
-        await random_sleep(.53, 1)
+    async def download_remote_config(self, version):
+        request = self.api.create_request()
+        request.download_remote_config_version(platform=1, app_version=version)
+        responses = await self.call(request, stamp=False, buddy=False, settings=True, dl_hash=False)
+
+        inventory_items = responses.get('GET_INVENTORY', {}).get('inventory_delta', {}).get('inventory_items', [])
+        for item in inventory_items:
+            player_stats = item.get('inventory_item_data', {}).get('player_stats', {})
+            if player_stats:
+                self.player_level = player_stats.get('level') or self.player_level
+                break
+        await self.random_sleep(.78, .95)
+
+    async def set_avatar(self, tutorial=False):
+        plater_avatar = avatar.new()
+        request = self.api.create_request()
+        request.list_avatar_customizations(
+            avatar_type=plater_avatar['avatar'],
+            slot=tuple(),
+            filters=(2,)
+        )
+        await self.call(request, buddy=not tutorial, action=5)
+        await self.random_sleep(7, 14)
+
+        request = self.api.create_request()
+        request.set_avatar(player_avatar=plater_avatar)
+        await self.call(request, buddy=not tutorial, action=2)
+
+        if tutorial:
+            await self.random_sleep(.5, 4)
+
+            request = self.api.create_request()
+            request.mark_tutorial_complete(tutorials_completed=1)
+            await self.call(request, buddy=False)
+
+        await self.random_sleep(.5, 1)
+
+        request = self.api.create_request()
+        request.get_player_profile()
+        await self.call(request, action=1)
+
+    async def app_simulation_login(self, version):
+        self.log.info('Starting RPC login sequence (iOS app simulation)')
+
+        # empty request
+        request = self.api.create_request()
+        await self.call(request, chain=False)
+        await self.random_sleep(.43, .97)
+
+        # request 1: get_player
+        tutorial_state = await self.get_player()
+
+        await self.random_sleep(.53, 1)
 
         # request 2: download_remote_config_version
         await self.download_remote_config(version)
@@ -296,9 +263,9 @@ class Worker:
         request.get_asset_digest(platform=1, app_version=version)
         responses = await self.call(request, buddy=False, settings=True)
 
-        await random_sleep(.87, 2)
+        await self.random_sleep(.87, 2)
 
-        if (config.COMPLETE_TUTORIAL and
+        if (conf.COMPLETE_TUTORIAL and
                 tutorial_state is not None and
                 not all(x in tutorial_state for x in (0, 1, 3, 4, 7))):
             try:
@@ -319,14 +286,14 @@ class Worker:
             request = self.api.create_request()
             request.get_player_profile()
             await self.call(request, settings=True)
-            await random_sleep(.2, .4)
+            await self.random_sleep(.2, .4)
 
             if self.player_level:
                 # request 5: level_up_rewards
                 request = self.api.create_request()
                 request.level_up_rewards(level=self.player_level)
                 await self.call(request, settings=True)
-                await random_sleep(.45, .7)
+                await self.random_sleep(.45, .7)
             else:
                 self.log.warning('No player level')
 
@@ -336,7 +303,7 @@ class Worker:
             await self.call(request, action=0.1)
 
             self.log.info('Finished RPC login sequence (iOS app simulation)')
-            await random_sleep(.5, 1.3)
+            await self.random_sleep(.5, 1.3)
         self.error_code = None
         return True
 
@@ -348,10 +315,10 @@ class Worker:
             request.mark_tutorial_complete(tutorials_completed=[0])
             await self.call(request, buddy=False)
 
-            await random_sleep(.35, .525)
+            await self.random_sleep(.35, .525)
 
             request = self.api.create_request()
-            request.get_player(player_locale=config.PLAYER_LOCALE)
+            request.get_player(player_locale=conf.PLAYER_LOCALE)
             await self.call(request, buddy=False)
             await sleep(1)
 
@@ -362,20 +329,20 @@ class Worker:
         starter_id = None
         if 3 not in tutorial_state:
             # encounter tutorial
-            await random_sleep(.7, .9)
+            await self.random_sleep(.7, .9)
             request = self.api.create_request()
             request.get_download_urls(asset_id=asset_ids)
             await self.call(request)
 
-            await random_sleep(7, 10.3)
+            await self.random_sleep(7, 10.3)
             request = self.api.create_request()
             starter = choice((1, 4, 7))
             request.encounter_tutorial_complete(pokemon_id=starter)
             await self.call(request, action=1)
 
-            await random_sleep(.4, .5)
+            await self.random_sleep(.4, .5)
             request = self.api.create_request()
-            request.get_player(player_locale=config.PLAYER_LOCALE)
+            request.get_player(player_locale=conf.PLAYER_LOCALE)
             responses = await self.call(request)
 
             try:
@@ -390,16 +357,16 @@ class Worker:
 
         if 4 not in tutorial_state:
             # name selection
-            await random_sleep(12, 18)
+            await self.random_sleep(12, 18)
             request = self.api.create_request()
             request.claim_codename(codename=self.username)
             await self.call(request, action=2)
 
-            await sleep(.7)
+            await sleep(.7, loop=LOOP)
             request = self.api.create_request()
-            request.get_player(player_locale=config.PLAYER_LOCALE)
+            request.get_player(player_locale=conf.PLAYER_LOCALE)
             await self.call(request)
-            await sleep(.13)
+            await sleep(.13, loop=LOOP)
 
             request = self.api.create_request()
             request.mark_tutorial_complete(tutorials_completed=4)
@@ -407,19 +374,19 @@ class Worker:
 
         if 7 not in tutorial_state:
             # first time experience
-            await random_sleep(3.9, 4.5)
+            await self.random_sleep(3.9, 4.5)
             request = self.api.create_request()
             request.mark_tutorial_complete(tutorials_completed=7)
             await self.call(request)
 
         if starter_id:
-            await random_sleep(4, 5)
+            await self.random_sleep(4, 5)
             request = self.api.create_request()
             request.set_buddy_pokemon(pokemon_id=starter_id)
             await self.call(request, action=2)
-            await random_sleep(.8, 1.2)
+            await self.random_sleep(.8, 1.2)
 
-        await sleep(.2)
+        await sleep(.2, loop=LOOP)
         return True
 
     def update_inventory(self, inventory_items):
@@ -429,7 +396,7 @@ class Worker:
                 item = obj['item']
                 item_id = item.get('item_id')
                 self.items[item_id] = item.get('count', 0)
-            elif config.INCUBATE_EGGS:
+            elif conf.INCUBATE_EGGS:
                 if ('pokemon_data' in obj and
                         obj['pokemon_data'].get('is_egg')):
                     egg = obj['pokemon_data']
@@ -462,28 +429,17 @@ class Worker:
             if buddy:
                 request.get_buddy_walked()
 
-        try:
-            refresh = HashServer.status.get('period')
-
-            while HashServer.status.get('remaining') < 5 and time() < refresh:
-                self.error_code = 'HASH WAITING'
-                wait = refresh - time() + 1
-                await sleep(wait)
-                refresh = HashServer.status.get('period')
-        except TypeError:
-            pass
-
-        now = time()
         if action:
+            now = time()
             # wait for the time required, or at least a half-second
             if self.last_action > now + .5:
-                await sleep(self.last_action - now)
+                await sleep(self.last_action - now, loop=LOOP)
             else:
-                await sleep(0.5)
+                await sleep(0.5, loop=LOOP)
 
         response = None
         err = None
-        for attempt in range(-1, config.MAX_RETRIES):
+        for attempt in range(-1, conf.MAX_RETRIES):
             try:
                 response = await request.call()
                 try:
@@ -501,26 +457,26 @@ class Worker:
             except (ex.NotLoggedInException, ex.AuthException) as e:
                 self.log.info('Auth error on {}: {}', self.username, e)
                 err = e
-                await sleep(3)
+                await sleep(3, loop=LOOP)
                 await self.login(reauth=True)
             except ex.TimeoutException as e:
                 self.error_code = 'TIMEOUT'
                 if err != e:
                     err = e
                     self.log.warning('{}', e)
-                await sleep(10)
+                await sleep(10, loop=LOOP)
             except ex.HashingOfflineException as e:
                 if err != e:
                     err = e
                     self.log.warning('{}', e)
                 self.error_code = 'HASHING OFFLINE'
-                await sleep(5)
+                await sleep(5, loop=LOOP)
             except ex.NianticOfflineException as e:
                 if err != e:
                     err = e
                     self.log.warning('{}', e)
                 self.error_code = 'NIANTIC OFFLINE'
-                await random_sleep()
+                await self.random_sleep()
             except ex.HashingQuotaExceededException as e:
                 if err != e:
                     err = e
@@ -530,46 +486,38 @@ class Worker:
                 now = time()
                 if refresh:
                     if refresh > now:
-                        await sleep(refresh - now + 1)
+                        await sleep(refresh - now + 1, loop=LOOP)
                     else:
-                        await sleep(5)
+                        await sleep(5, loop=LOOP)
                 else:
-                    await sleep(30)
-            except ex.NianticThrottlingException as e:
-                old_time = self.last_request
+                    await sleep(30, loop=LOOP)
+            except ex.BadRPCException:
+                raise
+            except ex.InvalidRPCException as e:
                 self.last_request = time()
                 if err != e:
                     err = e
-                    message = str(e)
-                    if 'GetMapObjects' in message:
-                        message = '{} {:.2f} seconds since last GMO.'.format(
-                            message, self.last_request - self.last_gmo)
-                    else:
-                        message = '{} {:.2f} seconds since last request.'.format(
-                            message, self.last_request - old_time)
-                    self.log.warning(message)
-                self.error_code = 'THROTTLE'
-                await random_sleep(11, 22, 12)
+                    self.log.warning('{}', e)
+                self.error_code = 'INVALID REQUEST'
+                await self.random_sleep()
             except ex.ProxyException as e:
                 if err != e:
                     err = e
                 self.error_code = 'PROXY ERROR'
 
-                if self.proxies:
+                if self.MULTIPROXY:
                     self.log.error('{}, swapping proxy.', e)
-                    proxy = self.proxy
-                    while proxy == self.proxy:
-                        self.new_proxy()
+                    self.swap_proxy()
                 else:
                     if err != e:
                         self.log.error('{}', e)
-                    await sleep(5)
+                    await sleep(5, loop=LOOP)
             except (ex.MalformedResponseException, ex.UnexpectedResponseException) as e:
                 self.last_request = time()
                 if err != e:
                     self.log.warning('{}', e)
                 self.error_code = 'MALFORMED RESPONSE'
-                await random_sleep(10, 14, 11)
+                await self.random_sleep()
         if err is not None:
             raise err
 
@@ -590,18 +538,18 @@ class Worker:
         if settings:
             try:
                 dl_settings = responses['DOWNLOAD_SETTINGS']
-                self.download_hash = dl_settings['hash']
+                Worker.download_hash = dl_settings['hash']
             except KeyError:
                 self.log.info('Missing DOWNLOAD_SETTINGS response.')
             else:
                 try:
                     if (not dl_hash
-                            and config.FORCED_KILL
-                            and dl_settings['settings']['minimum_client_version'] not in config.FORCED_KILL):
+                            and conf.FORCED_KILL
+                            and dl_settings['settings']['minimum_client_version'] not in VERSIONS):
                         err = 'A new version is being forced, exiting.'
                         self.log.error(err)
                         print(err)
-                        _thread.interrupt_main()
+                        exit()
                 except KeyError:
                     pass
         if self.check_captcha(responses):
@@ -612,7 +560,7 @@ class Worker:
 
     def travel_speed(self, point):
         '''Fast calculation of travel speed to point'''
-        time_diff = max(time() - self.last_request, config.SCAN_DELAY)
+        time_diff = max(time() - self.last_request, conf.SCAN_DELAY)
         distance = get_distance(self.location, point, _UNIT)
         # conversion from seconds to hours
         speed = (distance / time_diff) * 3600
@@ -642,70 +590,65 @@ class Worker:
             return await self.visit_point(point, bootstrap=bootstrap)
         except ex.NotLoggedInException:
             self.error_code = 'NOT AUTHENTICATED'
-            await sleep(1)
+            await sleep(1, loop=LOOP)
             if not await self.login(reauth=True):
                 await self.swap_account(reason='reauth failed')
             return await self.visit(point, bootstrap)
         except ex.AuthException as e:
             self.log.warning('Auth error on {}: {}', self.username, e)
             self.error_code = 'NOT AUTHENTICATED'
-            await sleep(3)
+            await sleep(3, loop=LOOP)
             await self.swap_account(reason='login failed')
         except CaptchaException:
             self.error_code = 'CAPTCHA'
             self.g['captchas'] += 1
-            await sleep(1)
+            await sleep(1, loop=LOOP)
             await self.bench_account()
         except CaptchaSolveException:
             self.error_code = 'CAPTCHA'
-            await sleep(1)
+            await sleep(1, loop=LOOP)
             await self.swap_account(reason='solving CAPTCHA failed')
         except ex.TempHashingBanException:
             self.error_code = 'HASHING BAN'
             self.log.error('Temporarily banned from hashing server for using invalid keys.')
-            await sleep(185)
+            await sleep(185, loop=LOOP)
         except ex.BannedAccountException:
             self.error_code = 'BANNED'
             self.log.warning('{} is banned', self.username)
-            await sleep(1)
+            await sleep(1, loop=LOOP)
             await self.remove_account()
         except ex.ProxyException as e:
             self.error_code = 'PROXY ERROR'
 
-            if self.proxies:
+            if self.MULTIPROXY:
                 self.log.error('{} Swapping proxy.', e)
-                proxy = self.proxy
-                while proxy == self.proxy:
-                    self.new_proxy()
+                self.swap_proxy()
             else:
                 self.log.error('{}', e)
-            await sleep(5)
         except ex.TimeoutException as e:
             self.log.warning('{} Giving up.', e)
         except ex.NianticIPBannedException:
             self.error_code = 'IP BANNED'
 
-            if config.CONTROL_SOCKS:
-                self.swap_circuit('IP ban')
-                await random_sleep(minimum=25, maximum=35)
-            elif self.proxies:
-                self.log.warning('Swapping out {} due to IP ban.', self.proxy)
-                proxy = self.proxy
-                while proxy == self.proxy:
-                    self.new_proxy()
-                await random_sleep(minimum=12, maximum=20)
+            if self.MULTIPROXY:
+                self.log.warning('Swapping out {} due to IP ban.', self.api.proxy)
+                self.swap_proxy()
             else:
                 self.log.error('IP banned.')
         except ex.ServerBusyOrOfflineException as e:
             self.log.warning('{} Giving up.', e)
-        except ex.NianticThrottlingException as e:
+        except ex.BadRPCException:
+            self.error_code = 'BAD REQUEST'
+            self.log.warning('{} received code 3 and is likely banned. Removing until next run.', self.username)
+            await self.new_account()
+        except ex.InvalidRPCException as e:
             self.log.warning('{} Giving up.', e)
         except ex.ExpiredHashKeyException:
             self.error_code = 'KEY EXPIRED'
-            err = 'Hash key has expired: {}'.format(config.HASH_KEY)
+            err = 'Hash key has expired: {}'.format(conf.HASH_KEY)
             self.log.error(err)
             print(err)
-            _thread.interrupt_main()
+            exit()
         except (ex.MalformedResponseException, ex.UnexpectedResponseException) as e:
             self.log.warning('{} Giving up.', e)
             self.error_code = 'MALFORMED RESPONSE'
@@ -715,16 +658,18 @@ class Worker:
         except ex.HashServerException as e:
             self.log.warning('{}', e)
             self.error_code = 'HASHING ERROR'
-        except ex.PgoapiError as e:
+        except ex.AiopogoError as e:
             self.log.exception(e.__class__.__name__)
-            self.error_code = 'PGOAPI ERROR'
+            self.error_code = 'AIOPOGO ERROR'
+        except CancelledError:
+            self.log.warning('Visit cancelled.')
         except Exception as e:
             self.log.exception('A wild {} appeared!', e.__class__.__name__)
             self.error_code = 'EXCEPTION'
-        await sleep(1)
         return False
 
     async def visit_point(self, point, bootstrap=False):
+        self.handle.cancel()
         if bootstrap:
             self.error_code = '∞'
         else:
@@ -733,7 +678,7 @@ class Worker:
         self.log.info('Visiting {0[0]:.4f},{0[1]:.4f}', point)
         start = time()
 
-        if config.CACHE_CELLS:
+        if conf.CACHE_CELLS:
             rounded = round_coords(point, 4)
             try:
                 cell_ids = self.cell_ids[rounded]
@@ -741,7 +686,7 @@ class Worker:
                 cell_ids = get_cell_ids(*rounded, compact=self.COMPACT)
                 self.cell_ids[rounded] = cell_ids
         else:
-            cell_ids = get_cell_ids(latitude, longitude)
+            cell_ids = get_cell_ids(latitude, longitude, 500)
 
         since_timestamp_ms = (0,) * len(cell_ids)
 
@@ -751,9 +696,9 @@ class Worker:
                                 latitude=latitude,
                                 longitude=longitude)
 
-        diff = self.last_gmo + config.SCAN_DELAY - time()
+        diff = self.last_gmo + conf.SCAN_DELAY - time()
         if diff > 0:
-            await sleep(diff)
+            await sleep(diff, loop=LOOP)
         responses = await self.call(request)
         self.last_gmo = self.last_request
 
@@ -761,9 +706,7 @@ class Worker:
             map_objects = responses['GET_MAP_OBJECTS']
 
             map_status = map_objects['status']
-            if map_status == 3:
-                raise ex.BannedAccountException('GMO code 3')
-            elif map_status != 1:
+            if map_status != 1:
                 error = 'GetMapObjects code for {}. Speed: {:.2f}'.format(self.username, self.speed)
                 self.empty_visits += 1
                 if self.empty_visits > 3:
@@ -771,20 +714,22 @@ class Worker:
                     await self.swap_account(reason)
                 raise ex.UnexpectedResponseException(error)
         except KeyError:
+            await self.random_sleep(.5, 1)
+            await self.get_player()
             raise ex.UnexpectedResponseException('Missing GetMapObjects response.')
 
         pokemon_seen = 0
         forts_seen = 0
         points_seen = 0
 
-        if config.NOTIFY:
+        if conf.NOTIFY:
             try:
                 time_of_day = map_objects['time_of_day']
             except KeyError:
                 self.empty_visits += 1
                 raise EmptyGMOException
 
-        if config.ITEM_LIMITS and self.bag_full():
+        if conf.ITEM_LIMITS and self.bag_full():
             await self.clean_bag()
 
         for map_cell in map_objects['map_cells']:
@@ -794,18 +739,21 @@ class Worker:
 
                 normalized = self.normalize_pokemon(pokemon)
 
-                if config.NOTIFY and self.notifier.eligible(normalized):
-                    if config.ENCOUNTER:
+                if conf.NOTIFY and self.notifier.eligible(normalized):
+                    if conf.ENCOUNTER:
                         try:
                             await self.encounter(normalized)
+                        except CancelledError:
+                            DB_PROC.add(normalized)
+                            raise
                         except Exception as e:
                             self.log.warning('{} during encounter', e.__class__.__name__)
-                    ensure_future(self.notifier.notify(normalized, time_of_day))
+                    LOOP.create_task(self.notifier.notify(normalized, time_of_day))
 
                 if (normalized not in SIGHTING_CACHE and
                         normalized not in MYSTERY_CACHE):
                     self.account_seen += 1
-                    if (config.ENCOUNTER == 'all' and
+                    if (conf.ENCOUNTER == 'all' and
                             'individual_attack' not in normalized):
                         try:
                             await self.encounter(normalized)
@@ -833,7 +781,7 @@ class Worker:
                             and (not spinning or spinning.done())):
                         cooldown = fort.get('cooldown_complete_timestamp_ms')
                         if not cooldown or time() > cooldown / 1000:
-                            spinning = ensure_future(self.spin_pokestop(pokestop))
+                            spinning = LOOP.create_task(self.spin_pokestop(pokestop))
                 else:
                     gym = self.normalize_gym(fort)
                     if (self.gyms and time() > self.next_gym and self.smart_throttle(1)
@@ -841,7 +789,7 @@ class Worker:
                         gymming = ensure_future(self.get_gym_details(gym))
                     DB_PROC.add(gym)
 
-            if config.MORE_POINTS or bootstrap:
+            if conf.MORE_POINTS or bootstrap:
                 for point in map_cell.get('spawn_points', []):
                     points_seen += 1
                     try:
@@ -853,8 +801,8 @@ class Worker:
                         self.log.warning('Spawn point exception ignored. {}', point)
                         pass
 
-        if (config.INCUBATE_EGGS and len(self.unused_incubators) > 0
-                and len(self.eggs) > 0 and self.smart_throttle()):
+        if (conf.INCUBATE_EGGS and self.unused_incubators
+                and self.eggs and self.smart_throttle()):
             await self.incubate_eggs()
 
         if pokemon_seen > 0:
@@ -862,8 +810,6 @@ class Worker:
             self.total_seen += pokemon_seen
             self.g['seen'] += pokemon_seen
             self.empty_visits = 0
-            if CIRCUIT_FAILURES:
-                CIRCUIT_FAILURES[self.proxy] = 0
         else:
             self.empty_visits += 1
             if forts_seen == 0:
@@ -874,15 +820,9 @@ class Worker:
             if self.empty_visits > 3:
                 reason = '{} empty visits'.format(self.empty_visits)
                 await self.swap_account(reason)
-            if CIRCUIT_FAILURES:
-                CIRCUIT_FAILURES[self.proxy] += 1
-                if CIRCUIT_FAILURES[self.proxy] > 20:
-                    reason = '{} empty visits'.format(
-                        CIRCUIT_FAILURES[self.proxy])
-                    self.swap_circuit(reason)
         self.visits += 1
 
-        if config.MAP_WORKERS:
+        if conf.MAP_WORKERS:
             self.worker_dict.update([(self.worker_no,
                 ((latitude, longitude), start, self.speed, self.total_seen,
                 self.visits, pokemon_seen))])
@@ -899,17 +839,17 @@ class Worker:
             await gymming
 
         self.update_accounts_dict()
-        LOOP.call_later(60, self.unset_code)
+        self.handle = LOOP.call_later(60, self.unset_code)
         return pokemon_seen + forts_seen + points_seen
 
     def smart_throttle(self, requests=1):
-        if not config.SMART_THROTTLE:
+        if not conf.SMART_THROTTLE:
             return True
 
         try:
             # https://en.wikipedia.org/wiki/Linear_equation#Two_variables
             # e.g. hashes_left > 2.25*seconds_left+7.5, spare = 0.05, max = 150
-            spare = config.SMART_THROTTLE * HashServer.status['maximum']
+            spare = conf.SMART_THROTTLE * HashServer.status['maximum']
             hashes_left = HashServer.status['remaining'] - requests
             usable_per_second = (HashServer.status['maximum'] - spare) / 60
             seconds_left = HashServer.status['period'] - time()
@@ -998,7 +938,7 @@ class Worker:
         else:
             self.log.warning('Failed spinning {}: {}', name, result)
 
-        self.next_spin = time() + config.SPIN_COOLDOWN
+        self.next_spin = time() + conf.SPIN_COOLDOWN
         self.error_code = '!'
         return responses
 
@@ -1025,7 +965,7 @@ class Worker:
             delay_required = triangular(1.5, 4, 2.25)
 
         if time() - self.last_request < delay_required:
-            await sleep(delay_required)
+            await sleep(delay_required, loop=LOOP)
 
         try:
             spawn_id = hex(pokemon['spawn_id'])[2:]
@@ -1057,7 +997,7 @@ class Worker:
     async def clean_bag(self):
         self.error_code = '|'
         rec_items = {}
-        limits = config.ITEM_LIMITS
+        limits = conf.ITEM_LIMITS
         for item, count in self.items.items():
             if item in limits and count > limits[item]:
                 discard = count - limits[item]
@@ -1103,7 +1043,7 @@ class Worker:
                         inc.get('id', 0), egg.get('id', 0), ret)
 
     async def handle_captcha(self, responses):
-        if self.num_captchas >= config.CAPTCHAS_ALLOWED:
+        if self.num_captchas >= conf.CAPTCHAS_ALLOWED:
             self.log.error("{} encountered too many CAPTCHAs, removing.", self.username)
             raise CaptchaException
 
@@ -1113,7 +1053,7 @@ class Worker:
         session = SessionManager.get()
         try:
             params = {
-                'key': config.CAPTCHA_KEY,
+                'key': conf.CAPTCHA_KEY,
                 'method': 'userrecaptcha',
                 'googlekey': '6LeeTScTAAAAADqvhqVMhPpr_vB9D364Ia-1dSgK',
                 'pageurl': responses.get('CHECK_CHALLENGE', {}).get('challenge_url'),
@@ -1121,6 +1061,8 @@ class Worker:
             }
             async with session.post('http://2captcha.com/in.php', params=params, timeout=10) as resp:
                 response = await resp.json()
+        except CancelledError:
+            raise
         except Exception as e:
             self.log.error('Got an error while trying to solve CAPTCHA. '
                            'Check your API Key and account balance.')
@@ -1129,7 +1071,7 @@ class Worker:
         code = response.get('request')
         if response.get('status') != 1:
             if code in ('ERROR_WRONG_USER_KEY', 'ERROR_KEY_DOES_NOT_EXIST', 'ERROR_ZERO_BALANCE'):
-                config.CAPTCHA_KEY = None
+                conf.CAPTCHA_KEY = None
                 self.log.error('2Captcha reported: {}, disabling CAPTCHA solving', code)
             else:
                 self.log.error("Failed to submit CAPTCHA for solving: {}", code)
@@ -1138,7 +1080,7 @@ class Worker:
         try:
             # Get the response, retry every 5 seconds if it's not ready
             params = {
-                'key': config.CAPTCHA_KEY,
+                'key': conf.CAPTCHA_KEY,
                 'action': 'get',
                 'id': code,
                 'json': 1
@@ -1148,7 +1090,9 @@ class Worker:
                     response = await resp.json()
                 if response.get('request') != 'CAPCHA_NOT_READY':
                     break
-                await sleep(5)
+                await sleep(5, loop=LOOP)
+        except CancelledError:
+            raise
         except Exception as e:
             self.log.error('Got an error while trying to solve CAPTCHA. '
                               'Check your API Key and account balance.')
@@ -1167,7 +1111,7 @@ class Worker:
             self.log.warning("Successfully solved CAPTCHA")
         except CaptchaException:
             self.log.warning("CAPTCHA #{} for {} was not solved correctly, trying again",
-                captcha_id, self.username)
+                code, self.username)
             # try again
             await self.handle_captcha(responses)
 
@@ -1194,7 +1138,7 @@ class Worker:
         except AttributeError:
             pass
 
-        self.accounts[self.username] = self.account
+        ACCOUNTS[self.username] = self.account
 
     async def remove_account(self):
         self.error_code = 'REMOVING'
@@ -1209,18 +1153,29 @@ class Worker:
         self.captcha_queue.put(self.account)
         await self.new_account()
 
-    async def swap_account(self, reason='', lock=False):
+    async def lock_and_swap(self, minutes):
+        async with self.busy:
+            self.error_code = 'SWAPPING'
+            h, m = divmod(int(minutes), 60)
+            if h:
+                timestr = '{}h{}m'.format(h, m)
+            else:
+                timestr = '{}m'.format(m)
+            self.log.warning('Swapping {} which had been running for {}.', self.username, timestr)
+            self.update_accounts_dict()
+            self.extra_queue.put(self.account)
+            await self.new_account()
+
+    async def swap_account(self, reason=''):
         self.error_code = 'SWAPPING'
         self.log.warning('Swapping out {} because {}.', self.username, reason)
-        if lock:
-            await self.busy.acquire()
         self.update_accounts_dict()
         self.extra_queue.put(self.account)
-        await self.new_account(lock)
+        await self.new_account()
 
-    async def new_account(self, lock=False):
-        if (config.CAPTCHA_KEY
-                and (config.FAVOR_CAPTCHA or self.extra_queue.empty())
+    async def new_account(self):
+        if (conf.CAPTCHA_KEY
+                and (conf.FAVOR_CAPTCHA or self.extra_queue.empty())
                 and not self.captcha_queue.empty()):
             self.account = self.captcha_queue.get()
         else:
@@ -1234,7 +1189,7 @@ class Worker:
         except KeyError:
             self.location = get_start_coords(self.worker_no)
         self.inventory_timestamp = self.account.get('inventory_timestamp')
-        self.player_level = self.account.get('player_level')
+        self.player_level = self.account.get('level')
         self.last_request = self.account.get('time', 0)
         self.last_action = self.last_request
         self.last_gmo = self.last_request
@@ -1244,17 +1199,6 @@ class Worker:
         self.unused_incubators = []
         self.initialize_api()
         self.error_code = None
-        if lock:
-            self.busy.release()
-
-    def seen_per_second(self, now):
-        try:
-            seconds_active = now - self.account_start
-            if seconds_active < 120:
-                return None
-            return self.account_seen / seconds_active
-        except TypeError:
-            return None
 
     def unset_code(self):
         self.error_code = None
@@ -1290,10 +1234,7 @@ class Worker:
 
     @staticmethod
     def normalize_lured(raw, now):
-        if config.SPAWN_ID_INT:
-            spawn_id = -1
-        else:
-            spawn_id = 'LURED'
+        spawn_id = -1 if conf.SPAWN_ID_INT else 'LURED'
         return {
             'type': 'pokemon',
             'encounter_id': raw['lure_info']['encounter_id'],
@@ -1336,10 +1277,19 @@ class Worker:
             return False
         else:
             if challenge_url != ' ':
-                if config.CAPTCHA_KEY:
+                if conf.CAPTCHA_KEY:
                     return True
                 raise CaptchaException
             return False
+
+    @staticmethod
+    async def random_sleep(minimum=10.1, maximum=14):
+        """Sleeps for a bit"""
+        await sleep(uniform(minimum, maximum), loop=LOOP)
+
+    @property
+    def start_time(self):
+        return self.api.start_time
 
     @property
     def status(self):
@@ -1361,6 +1311,11 @@ class Worker:
             return self.api._auth_provider.is_login()
         except AttributeError:
             return False
+
+
+class HandleStub:
+    def cancel(self):
+        pass
 
 
 class EmptyGMOException(Exception):

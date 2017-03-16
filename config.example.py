@@ -28,13 +28,20 @@ MAP_END = (40.7143, -111.8046)
 STAY_WITHIN_MAP = True
 
 # ensure that you visit within this many meters of every part of your map during bootstrap
-#BOOTSTRAP_RADIUS = 450
+#BOOTSTRAP_RADIUS = 240
 
 GIVE_UP_KNOWN = 75   # try to find a worker for a known spawn for this many seconds before giving up
 GIVE_UP_UNKNOWN = 60 # try to find a worker for an unknown point for this many seconds before giving up
 SKIP_SPAWN = 90      # don't even try to find a worker for a spawn if the spawn time was more than this many seconds ago
 
-# the directory that the pickles folder, socket, etc. will go in
+# How often should the mystery queue be reloaded (default 90s)
+# this will reduce the grouping of workers around the last few mysteries
+#RESCAN_UNKNOWN = 90
+
+# filename of accounts CSV
+ACCOUNTS_CSV = 'accounts.csv'
+
+# the directory that the pickles folder, socket, CSV, etc. will go in
 # defaults to working directory if not set
 #DIRECTORY = None
 
@@ -62,26 +69,6 @@ SEARCH_SLEEP = 2.5
 #from shapely.geometry import Polygon
 #BOUNDARIES = Polygon(((40.799609, -111.948556), (40.792749, -111.887341), (40.779264, -111.838078), (40.761410, -111.817908), (40.728636, -111.805293), (40.688833, -111.785564), (40.689768, -111.919389), (40.750461, -111.949938)))
 
-# If accounts use the same provider and password you can set defaults here
-# and omit them from the accounts list.
-#PASS = 'pik4chu'
-#PROVIDER = 'ptc'
-
-### Device information will be generated for you if you do not provide it.
-### Account details are automatically retained in pickles/accounts.pickle
-## valid account formats (without PASS and PROVIDER set):
-# (username, password, provider, iPhone, iOS, device_id)
-# (username, password, provider)
-## valid account formats (with PASS and PROVIDER set):
-# (username, iPhone, iOS, device_id)
-# [username]
-ACCOUNTS = [
-    ('ash_ketchum', 'pik4chu', 'ptc'),
-    ('ziemniak_kalafior', 'ogorek', 'google'),
-    ('noideawhattoputhere', 's3cr3t', 'ptc'),
-    ('misty', 'bulbus4ur', 'ptc')
-]
-
 # key for Bossland's hashing server, otherwise the old hashing lib will be used
 #HASH_KEY = '9d87af14461b93cb3605'  # this key is fake
 
@@ -93,6 +80,11 @@ ACCOUNTS = [
 # value: how many requests to keep as spare (0.1 = 10%), False to disable
 #SMART_THROTTLE = 0.1
 
+# Swap the worker that has seen the fewest Pokémon every x seconds
+# Defaults to whatever will allow every worker to be swapped within 6 hours
+#SWAP_OLDEST = 300  # 5 minutes
+# Only swap if it's been active for more than x minutes
+#MINIMUM_RUNTIME = 10
 
 ### these next 6 options use more requests but look more like the real client
 APP_SIMULATION = True     # mimic the actual app's login requests
@@ -111,8 +103,7 @@ SPIN_POKESTOPS = False # spin all PokéStops that are within range
 SPIN_COOLDOWN = 300    # spin only one PokéStop every n seconds (default 300)
 
 # minimum number of each item to keep if the bag is cleaned
-# remove or set to None to disable bag cleaning
-# automatically disabled if SPIN_POKESTOPS is disabled
+# bag cleaning is disabled if this is not present or is commented out
 ''' # triple quotes are comments, remove them to use this ITEM_LIMITS example
 ITEM_LIMITS = {
     1:    20,  # Poké Ball
@@ -124,11 +115,13 @@ ITEM_LIMITS = {
     104:  40,  # Max Potion
     201:   0,  # Revive
     202:  40,  # Max Revive
+    701:  20,  # Razz Berry
+    702:  20,  # Bluk Berry
+    703:  20,  # Nanab Berry
+    704:  20,  # Wepar Berry
+    705:  20,  # Pinap Berry
 }
 '''
-
-# Swap the worker that has seen the fewest Pokémon every x seconds
-SWAP_WORST = 600  # 10 minutes
 
 # Update the console output every x seconds
 REFRESH_RATE = 0.6  # 600ms
@@ -163,7 +156,7 @@ RARE_IDS = (
 )
 
 from datetime import datetime
-REPORT_SINCE = datetime(2016, 12, 17)  # base reports on data from after this date
+REPORT_SINCE = datetime(2017, 2, 17)  # base reports on data from after this date
 
 # used for altitude queries and maps in reports
 GOOGLE_MAPS_KEY = 'OYOgW1wryrp2RKJ81u7BLvHfYUA6aArIyuQCXu4'  # this key is fake
@@ -177,7 +170,10 @@ REPORT_MAPS = True  # Show maps on reports
 ## Get new accounts from the CAPTCHA queue first if it's not empty
 #FAVOR_CAPTCHA = True
 
-MAP_WORKERS = True  # allow displaying the live location of workers on the map
+# allow displaying the live location of workers on the map
+MAP_WORKERS = True
+# filter these Pokemon from the map to reduce traffic and browser load
+#MAP_FILTER_IDS = [161, 165, 16, 19, 167]
 
 # unix timestamp of last spawn point migration, spawn times learned before this will be ignored
 LAST_MIGRATION = 1481932800  # Dec. 17th, 2016
@@ -197,15 +193,14 @@ LAST_MIGRATION = 1481932800  # Dec. 17th, 2016
 
 # Bytestring key to authenticate with manager for inter-process communication
 #AUTHKEY = b'm3wtw0'
-# Address to use for manager, leave unset or set to None if you're note sure.
+# Address to use for manager, leave commented if you're not sure.
 #MANAGER_ADDRESS = r'\\.\pipe\monocle'  # must be in this format for Windows
 #MANAGER_ADDRESS = 'monocle.sock'       # the socket name for Unix systems
-#MANAGER_ADDRESS = ('127.0.0.1', 5002)    # could be used for CAPTCHA solving and live worker maps on remote systems
+#MANAGER_ADDRESS = ('127.0.0.1', 5002)  # could be used for CAPTCHA solving and live worker maps on remote systems
 
 # Store the cell IDs so that they don't have to be recalculated every visit.
-# Highly recommended unless you don't have enough memory for them.
-# Disabling will increase processor usage.
-#CACHE_CELLS = True
+# Enabling will increase memory usage.
+#CACHE_CELLS = False
 
 # Only for use with web-sanic (requires PostgreSQL)
 #DB = {'host': '127.0.0.1', 'user': 'monocle_role', 'password': 'pik4chu', 'port': '5432', 'database': 'monocle'}
@@ -221,10 +216,10 @@ LOAD_CUSTOM_HTML_FILE = False # File path MUST be 'templates/custom.html'
 LOAD_CUSTOM_CSS_FILE = False  # File path MUST be 'static/css/custom.css'
 LOAD_CUSTOM_JS_FILE = False  # File path MUST be 'static/js/custom.js'
 
-FB_PAGE_ID = None
-TWITTER_SCREEN_NAME = None  # Username withouth '@' char
-DISCORD_INVITE_ID = None
-TELEGRAM_USERNAME = None  # Username withouth '@' char
+#FB_PAGE_ID = None
+#TWITTER_SCREEN_NAME = None  # Username withouth '@' char
+#DISCORD_INVITE_ID = None
+#TELEGRAM_USERNAME = None  # Username withouth '@' char
 
 ## Variables below will be used as default values on frontend
 FIXED_OPACITY = False  # Make marker opacity independent of remaining time
@@ -284,7 +279,7 @@ INITIAL_SCORE = 0.7  # the required score immediately after a notification
 MINIMUM_SCORE = 0.4  # the required score after FULL_TIME seconds have passed
 
 ### The following values are fake, replace them with your own keys to enable
-### notifications, otherwise leave them out of your config or set them to None.
+### notifications, otherwise exclude them from your config
 ### You must provide keys for at least one service to use notifications.
 
 #PB_API_KEY = 'o.9187cb7d5b857c97bfcaa8d63eaa8494'

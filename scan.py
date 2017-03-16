@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
 
-try:
-    from monocle import config
-except ImportError as e:
-    raise ImportError('Please copy config.example.py to config.py and customize it.') from e
+import monocle.sanitized as conf
 
 import asyncio
 try:
-    if not hasattr(config, 'UVLOOP') or config.UVLOOP:
+    if conf.UVLOOP:
         from uvloop import EventLoopPolicy
         asyncio.set_event_loop_policy(EventLoopPolicy())
 except ImportError:
@@ -18,15 +15,14 @@ from queue import Queue, Full
 from argparse import ArgumentParser
 from signal import signal, SIGINT, SIGTERM, SIG_IGN
 from logging import getLogger, basicConfig, WARNING, INFO
+from logging.handlers import RotatingFileHandler
 from os.path import exists, join
 from sys import platform
 from concurrent.futures import TimeoutError
 
-from sqlalchemy.exc import DBAPIError
-from pogo_async import close_sessions
-
 import time
 
+<<<<<<< HEAD
 # Check whether config has all necessary attributes
 _required = (
     'DB_ENGINE',
@@ -133,8 +129,10 @@ if config.FORCED_KILL is True:
 
 if not config.COROUTINES_LIMIT:
     config.COROUTINES_LIMIT = config.GRID[0] * config.GRID[1]
+from sqlalchemy.exc import DBAPIError
+from aiopogo import close_sessions, activate_hash_server
 
-from monocle.shared import LOOP, get_logger, SessionManager
+from monocle.shared import LOOP, get_logger, SessionManager, ACCOUNTS
 from monocle.utils import get_address, dump_pickle
 from monocle.worker import Worker
 from monocle.overseer import Overseer
@@ -216,12 +214,16 @@ def parse_args():
 
 
 def configure_logger(filename='scan.log'):
+    if filename:
+        handlers = (RotatingFileHandler(filename, maxBytes=500000, backupCount=4),)
+    else:
+        handlers = None
     basicConfig(
-        filename=filename,
         format='[{asctime}][{levelname:>8s}][{name}] {message}',
         datefmt='%Y-%m-%d %X',
         style='{',
-        level=INFO
+        level=INFO,
+        handlers=handlers
     )
 
 
@@ -234,17 +236,19 @@ def exception_handler(loop, context):
         print('Exception in exception handler.')
 
 
-def cleanup(overseer, manager, checker):
+def cleanup(overseer, manager):
     try:
-        checker.cancel()
+        overseer.running = False
         print('Exiting, please wait until all tasks finish')
 
         log = get_logger('cleanup')
         print('Finishing tasks...')
+
+        LOOP.create_task(overseer.exit_progress())
         pending = asyncio.Task.all_tasks(loop=LOOP)
         gathered = asyncio.gather(*pending, return_exceptions=True)
         try:
-            LOOP.run_until_complete(asyncio.wait_for(gathered, 30))
+            LOOP.run_until_complete(asyncio.wait_for(gathered, 40))
         except TimeoutError as e:
             print('Coroutine completion timed out, moving on.')
         except Exception as e:
@@ -254,9 +258,9 @@ def cleanup(overseer, manager, checker):
         overseer.refresh_dict()
 
         print('Dumping pickles...')
-        dump_pickle('accounts', Worker.accounts)
+        dump_pickle('accounts', ACCOUNTS)
         FORT_CACHE.pickle()
-        if config.CACHE_CELLS:
+        if conf.CACHE_CELLS:
             dump_pickle('cells', Worker.cell_ids)
 
         DB_PROC.stop()
@@ -284,7 +288,7 @@ def main():
     args = parse_args()
     log = get_logger()
     if args.status_bar:
-        configure_logger(filename=join(config.DIRECTORY, 'scan.log'))
+        configure_logger(filename=join(conf.DIRECTORY, 'scan.log'))
         log.info('-' * 37)
         log.info('Starting up!')
     else:
@@ -293,11 +297,11 @@ def main():
 
     AccountManager.register('captcha_queue', callable=get_captchas)
     AccountManager.register('extra_queue', callable=get_extras)
-    if config.MAP_WORKERS:
+    if conf.MAP_WORKERS:
         AccountManager.register('worker_dict', callable=get_workers,
                                 proxytype=DictProxy)
     address = get_address()
-    manager = AccountManager(address=address, authkey=config.AUTHKEY)
+    manager = AccountManager(address=address, authkey=conf.AUTHKEY)
     try:
         manager.start(mgr_init)
     except (OSError, EOFError) as e:
@@ -308,19 +312,19 @@ def main():
 
     LOOP.set_exception_handler(exception_handler)
 
-    overseer = Overseer(status_bar=args.status_bar, manager=manager)
-    overseer.start()
-    checker = asyncio.ensure_future(overseer.check())
-    launcher = asyncio.ensure_future(overseer.launch(args.bootstrap, args.pickle))
+    overseer = Overseer(manager)
+    overseer.start(args.status_bar)
+    launcher = LOOP.create_task(overseer.launch(args.bootstrap, args.pickle))
+    activate_hash_server(conf.HASH_KEY)
     if platform != 'win32':
         LOOP.add_signal_handler(SIGINT, launcher.cancel)
         LOOP.add_signal_handler(SIGTERM, launcher.cancel)
     try:
         LOOP.run_until_complete(launcher)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, SystemExit):
         launcher.cancel()
     finally:
-        cleanup(overseer, manager, checker)
+        cleanup(overseer, manager)
 
 
 if __name__ == '__main__':
