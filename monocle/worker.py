@@ -11,7 +11,7 @@ from aiopogo.auth_ptc import AuthPtc
 from aiopogo.hash_server import HashServer
 from pogeo import get_distance
 
-from .db import SIGHTING_CACHE, MYSTERY_CACHE, Bounds
+from .db import SIGHTING_CACHE, MYSTERY_CACHE, FORT_CACHE, Bounds
 from .utils import round_coords, load_pickle, get_device_info, get_spawn_id, get_start_coords, Units, randomize_point
 from .shared import get_logger, LOOP, SessionManager, run_threaded, ACCOUNTS
 from .spawns import SPAWNS
@@ -776,17 +776,17 @@ class Worker:
                             self.account_seen += 1
                             DB_PROC.add(norm)
                     pokestop = self.normalize_pokestop(fort)
-                    DB_PROC.add(pokestop)
                     if (self.pokestops and not self.bag_full()
                             and time() > self.next_spin and self.smart_throttle(2)
                             and (not spinning or spinning.done())):
                         cooldown = fort.get('cooldown_complete_timestamp_ms')
                         if not cooldown or time() > cooldown / 1000:
                             spinning = LOOP.create_task(self.spin_pokestop(pokestop))
+                    DB_PROC.add(pokestop)
                 else:
                     gym = self.normalize_gym(fort)
                     if (self.gyms and time() > self.next_gym and self.smart_throttle(1)
-                            and (not gymming or gymming.done())):
+                            and (not gymming or gymming.done()) and gym not in FORT_CACHE):
                         gymming = LOOP.create_task(self.get_gym_details(gym))
                     DB_PROC.add(gym)
 
@@ -869,7 +869,7 @@ class Worker:
         # randomize location up to ~1.4 meters
         self.simulate_jitter(amount=0.00001)
 
-        version = '5702'
+        version = '5704'
 
         request = self.api.create_request()
         request.get_gym_details(gym_id = gym['external_id'],
@@ -884,6 +884,13 @@ class Worker:
         result = responses.get('GET_GYM_DETAILS', {}).get('result', 0)
         if result == 1:
             self.log.info('GET_GYM_DETAILS {}.', name)
+            try:
+                gym['name'] = name
+                gym['url'] = responses['GET_GYM_DETAILS']['urls'][0]
+                gym['description'] = responses['GET_GYM_DETAILS'].get('description', '')
+
+            except KeyError:
+                self.log.error('Missing Gym data in get_gym_details response.')
         elif result == 2:
             self.log.info('The server said {} was out of gym details range. {:.1f}m {:.1f}{}',
                 name, distance, self.speed, UNIT_STRING)
@@ -913,6 +920,11 @@ class Worker:
                              longitude = pokestop['lon'])
         responses = await self.call(request, action=1.2)
         name = responses.get('FORT_DETAILS', {}).get('name')
+        try:
+            pokestop['name'] = name
+            pokestop['url'] = responses['FORT_DETAILS']['image_urls'][0]
+        except KeyError:
+            self.log.error('Missing Pokestop data in fort_details response.')
 
         request = self.api.create_request()
         request.fort_search(fort_id = pokestop['external_id'],
@@ -1267,7 +1279,9 @@ class Worker:
             'type': 'pokestop',
             'external_id': raw['id'],
             'lat': raw['latitude'],
-            'lon': raw['longitude']
+            'lon': raw['longitude'],
+            'name': '',
+            'url': ''
         }
 
     @staticmethod

@@ -209,7 +209,7 @@ _defaults = {
     'SPEED_LIMIT': 19.5,
     'SPEED_UNIT': 'miles',
     'SPIN_COOLDOWN': 300,
-    'GYM_COOLDOWN': 180,
+    'GYM_COOLDOWN': 20,
     'SPIN_POKESTOPS': False,
     'GET_GYM_DETAILS': False,
     'STAT_REFRESH': 5,
