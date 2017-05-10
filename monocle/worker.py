@@ -1220,11 +1220,15 @@ class Worker:
 
     @staticmethod
     def normalize_pokestop(raw):
+        lure_expiration = 0
+        if 'lure_info' in raw:
+            lure_expiration = (raw['last_modified_timestamp_ms'] // 1000) + 1800
         return {
             'type': 'pokestop',
             'external_id': raw['id'],
             'lat': raw['latitude'],
-            'lon': raw['longitude']
+            'lon': raw['longitude'],
+            'lure_expiration': lure_expiration,
         }
 
     @staticmethod

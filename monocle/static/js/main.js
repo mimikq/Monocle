@@ -2,6 +2,7 @@ var _last_pokemon_id = 0;
 var _pokemon_count = 251;
 var _WorkerIconUrl = 'static/monocle-icons/assets/ball.png';
 var _PokestopIconUrl = 'static/monocle-icons/assets/stop.png';
+var _PokestopLuredIconUrl = 'static/monocle-icons/assets/stop_lured.png';
 
 var PokemonIcon = L.Icon.extend({
     options: {
@@ -39,6 +40,13 @@ var PokestopIcon = L.Icon.extend({
         iconSize: [10, 20],
         className: 'pokestop-icon',
         iconUrl: _PokestopIconUrl
+    }
+});
+var PokestopLuredIcon = L.Icon.extend({
+    options: {
+        iconSize: [10, 20],
+        className: 'pokestop-lured-icon',
+        iconUrl: _PokestopLuredIconUrl
     }
 });
 
@@ -255,6 +263,9 @@ function addSpawnsToMap (data, map) {
 function addPokestopsToMap (data, map) {
     data.forEach(function (item) {
         var icon = new PokestopIcon();
+        if (item.lure_expiration != 0) {
+            icon = new PokestopLuredIcon();
+        }
         var marker = L.marker([item.lat, item.lon], {icon: icon});
         marker.raw = item;
         marker.bindPopup('<b>Pokestop: ' + item.external_id + '</b>' +
