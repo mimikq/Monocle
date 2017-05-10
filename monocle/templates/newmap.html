@@ -15,8 +15,8 @@
         var _MapCoords = [{{ map_center[0] }}, {{ map_center[1] }}];
         var _MapProviderUrl = '{{ map_provider_url }}';
         var _MapProviderAttribution = '{{ map_provider_attribution|safe }}';
-	_defaultSettings = {};
-	_updateTimeInterval = null;
+        _defaultSettings = {};
+        _updateTimeInterval = null;
     </script>
 
     <div id="main-map" class="map"></div>
@@ -32,8 +32,6 @@
         <ul class="nav nav-pills nav-justified nav-settings">
             <li class="active"><a href="#" data-panel="filters">Filters</a></li>
             <li><a href="#" data-panel="more">More</a></li>
-            <!-- New item example -->
-            <!-- <li><a href="#" data-panel="example">Example</a></li> -->
         </ul>
         <div class="panel panel-default settings-panel active" data-panel="filters">
             <div class="panel-heading">Filters Settings</div>
@@ -58,18 +56,11 @@
                 <button id="reset_btn" type="button" class="btn btn-danger">Reset</button>
             </div>
         </div>
-        <!-- New item example -->
-        <!--
-        <div class="panel panel-default settings-panel" data-panel="example">
-            <div class="panel-heading">Example Settings</div>
-            <div class="panel-body">Panel Content</div>
-        </div>
-        -->
     </div>
 
     <script>{{ init_js_vars }}</script>
 
-    <script src='static/js/jquery-3.1.1.min.js'></script>
+    <script src='static/js/jquery-3.2.0.min.js'></script>
     <script src='static/js/leaflet.js'></script>
     <script src='static/js/bootstrap.min.js'></script>
     <script src='static/js/main.js'></script>

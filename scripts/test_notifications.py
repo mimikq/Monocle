@@ -2,7 +2,7 @@
 
 from asyncio import get_event_loop, set_event_loop_policy
 from pathlib import Path
-from random import uniform, randint, choice
+from cyrandom import uniform, randint, choice
 from argparse import ArgumentParser
 
 try:
@@ -51,7 +51,7 @@ args = parser.parse_args()
 if args.id is not None:
     pokemon_id = args.id
     if args.id == 0:
-        names.POKEMON_NAMES[0] = 'Test'
+        names.POKEMON[0] = 'Test'
 else:
     pokemon_id = randint(1, 252)
 
@@ -62,7 +62,7 @@ conf.HASHTAGS = {'test'}
 
 from monocle.notification import Notifier
 from monocle.shared import SessionManager
-from monocle.names import POKEMON_MOVES
+from monocle.names import MOVES
 
 root = logging.getLogger()
 root.setLevel(logging.DEBUG)
@@ -70,7 +70,7 @@ ch = logging.StreamHandler(sys.stdout)
 ch.setLevel(logging.DEBUG)
 root.addHandler(ch)
 
-MOVES = tuple(POKEMON_MOVES.keys())
+MOVES = tuple(MOVES.keys())
 
 if args.latitude is not None:
     lat = args.latitude

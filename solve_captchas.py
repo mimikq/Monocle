@@ -2,7 +2,6 @@
 
 from multiprocessing.managers import BaseManager
 from asyncio import get_event_loop, sleep
-from random import uniform
 from time import time
 
 from selenium import webdriver
@@ -12,8 +11,8 @@ from selenium.webdriver.common.by import By
 from aiopogo import PGoApi, close_sessions, activate_hash_server, exceptions as ex
 from aiopogo.auth_ptc import AuthPtc
 
-from monocle import sanitized as conf
-from monocle.utils import random_altitude, get_device_info, get_address, randomize_point
+from monocle import altitudes, sanitized as conf
+from monocle.utils import get_device_info, get_address, randomize_point
 from monocle.bounds import center
 
 
@@ -72,13 +71,13 @@ async def main():
             if location and location != (0,0,0):
                 lat = location[0]
                 lon = location[1]
-                try:
-                    alt = location[2]
-                except IndexError:
-                    alt = random_altitude()
             else:
                 lat, lon = randomize_point(center, 0.0001)
-                alt = random_altitude()
+
+            try:
+                alt = altitudes.get((lat, lon))
+            except KeyError:
+                alt = await altitudes.fetch((lat, lon))
 
             try:
                 device_info = get_device_info(account)
@@ -86,14 +85,16 @@ async def main():
                 api.set_position(lat, lon, alt)
 
                 authenticated = False
-                if account.get('provider') == 'ptc' and account.get('refresh'):
-                    api._auth_provider = AuthPtc()
-                    api._auth_provider.set_refresh_token(account.get('refresh'))
-                    api._auth_provider._access_token = account.get('auth')
-                    api._auth_provider._access_token_expiry = account.get('expiry')
-                    if api._auth_provider.check_access_token():
-                        api._auth_provider._login = True
-                        authenticated = True
+                try:
+                    if account['provider'] == 'ptc':
+                        api.auth_provider = AuthPtc()
+                        api.auth_provider._access_token = account['auth']
+                        api.auth_provider._access_token_expiry = account['expiry']
+                        if api.auth_provider.check_access_token():
+                            api.auth_provider.authenticated = True
+                            authenticated = True
+                except KeyError:
+                    pass
 
                 if not authenticated:
                     await api.set_authentication(username=username,
@@ -105,7 +106,7 @@ async def main():
 
                 await sleep(.6)
 
-                request.download_remote_config_version(platform=1, app_version=5704)
+                request.download_remote_config_version(platform=1, app_version=6100)
                 request.check_challenge()
                 request.get_hatched_eggs()
                 request.get_inventory()

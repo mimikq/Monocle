@@ -60,10 +60,9 @@ Since it uses [Leaflet](http://leafletjs.com/) for mapping, the appearance and d
     * *psycopg2* is required for using a PostgreSQL database
     * *aiosocks* is required for using SOCKS proxies
     * *cchardet* and *aiodns* provide better performance with aiohttp
-    * *numba* provides better performance through JIT compilation
-    * *sanic* and *asyncpg* (and a Postgres DB) are required for web-sanic
+    * *sanic* and *asyncpg* (and a Postgres DB) are required for web_sanic
     * *ujson* for better JSON encoding and decoding performance
-6. Run `python3 create_db.py` from the command line
+6. Run `python3 scripts/create_db.py` from the command line
 7. Run `python3 scan.py`
   * Optionally run the live map interface and reporting system: `python3 web.py`
 
@@ -86,6 +85,10 @@ The workers' live locations and stats can be viewed from the main map by enablin
 The gyms statistics server is in a separate file, because it's intended to be shared publicly as a webpage.
 
 [![gyms](https://i.imgur.com/MWpHAEWm.jpg)](monocle/static/demo/gyms.png)
+
+## Getting Started Tips & FAQs
+
+Visit our [Wiki](https://github.com/Noctem/Monocle/wiki) for more info.
 
 ## License
 

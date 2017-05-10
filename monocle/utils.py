@@ -1,10 +1,5 @@
-import random
-import requests
-import time
 import socket
-import pickle
 
-from polyline import encode as polyencode
 from os import mkdir
 from os.path import join, exists
 from sys import platform
@@ -12,21 +7,18 @@ from asyncio import sleep
 from math import sqrt
 from uuid import uuid4
 from enum import Enum
-from logging import getLogger
 from csv import DictReader
+from cyrandom import choice, shuffle, uniform
+from time import time
+from pickle import dump as pickle_dump, load as pickle_load, HIGHEST_PROTOCOL
 
 from geopy import Point
 from geopy.distance import distance
 from aiopogo import utilities as pgoapi_utils
 from pogeo import get_distance
 
-try:
-    from numba import jit
-except ImportError:
-    def jit(func):
-        return func
-
 from . import bounds, sanitized as conf
+
 
 IPHONES = {'iPhone5,1': 'N41AP',
            'iPhone5,2': 'N42AP',
@@ -45,21 +37,31 @@ IPHONES = {'iPhone5,1': 'N41AP',
            'iPhone9,4': 'D111AP'}
 
 
-log = getLogger(__name__)
-
-
 class Units(Enum):
     miles = 1
     kilometers = 2
     meters = 3
 
 
-@jit
-def get_start_coords(worker_no):
+def best_factors(n):
+    return next(((i, n//i) for i in range(int(n**0.5), 0, -1) if n % i == 0))
+
+
+def percentage_split(seq, percentages):
+    percentages[-1] += 1.0 - sum(percentages)
+    prv = 0
+    size = len(seq)
+    cum_percentage = 0
+    for p in percentages:
+        cum_percentage += p
+        nxt = int(cum_percentage * size)
+        yield seq[prv:nxt]
+        prv = nxt
+
+
+def get_start_coords(worker_no, grid=conf.GRID, bounds=bounds):
     """Returns center of square for given worker"""
-    grid = conf.GRID
-    total_workers = grid[0] * grid[1]
-    per_column = int(total_workers / grid[0])
+    per_column = int((grid[0] * grid[1]) / grid[0])
 
     column = worker_no % per_column
     row = int(worker_no / per_column)
@@ -71,13 +73,13 @@ def get_start_coords(worker_no):
 
 
 def float_range(start, end, step):
-    """xrange for floats, also capable of iterating backwards"""
+    """range for floats, also capable of iterating backwards"""
     if start > end:
-        while end < start:
+        while end <= start:
             yield start
             start += -step
     else:
-        while start < end:
+        while start <= end:
             yield start
             start += step
 
@@ -97,79 +99,30 @@ def get_gains(dist=70):
     return abs(start.latitude - lat_gain), abs(start.longitude - lon_gain)
 
 
-@jit
-def round_coords(point, precision):
-    return round(point[0], precision), round(point[1], precision)
+def round_coords(point, precision, _round=round):
+    return _round(point[0], precision), _round(point[1], precision)
 
 
-@jit
-def random_altitude():
-    altitude = random.uniform(*conf.ALT_RANGE)
-    return altitude
-
-
-def get_altitude(point):
-    params = {
-        'locations': 'enc:' + polyencode((point,)),
-        'key': conf.GOOGLE_MAPS_KEY
-    }
-    r = requests.get('https://maps.googleapis.com/maps/api/elevation/json',
-                     params=params).json()
-    return r['results'][0]['elevation']
-
-
-def get_altitudes(coords):
-    def chunks(l, n):
-        """Yield successive n-sized chunks from l."""
-        for i in range(0, len(l), n):
-            yield l[i:i + n]
-
-    if len(coords) > 300:
-        altitudes = {}
-        for chunk in chunks(coords, 300):
-            altitudes.update(get_altitudes(chunk))
-        return altitudes
-    else:
-        try:
-            params = {'locations': 'enc:' + polyencode(coords)}
-            if conf.GOOGLE_MAPS_KEY:
-                params['key'] = conf.GOOGLE_MAPS_KEY
-            r = requests.get('https://maps.googleapis.com/maps/api/elevation/json',
-                             params=params).json()
-
-            return {round_coords((x['location']['lat'], x['location']['lng']), conf.ALT_PRECISION):
-                    x['elevation'] for x in r['results']}
-        except Exception:
-            log.exception('Error fetching altitudes.')
-            return {}
-
-
-def get_all_altitudes(bound=False):
+def get_bootstrap_points(bounds):
     coords = []
-    precision = conf.ALT_PRECISION
-    gain = 1 / (10 ** precision)
-    for lat in float_range(bounds.south, bounds.north, gain):
-        for lon in float_range(bounds.west, bounds.east, gain):
-            point = lat, lon
-            if not bound or point not in bounds:
-                coords.append(round_coords(point, precision))
-    return get_altitudes(coords)
-
-
-def get_bootstrap_points():
+    if bounds.multi:
+        for b in bounds.polygons:
+            coords.extend(get_bootstrap_points(b))
+        return coords
     lat_gain, lon_gain = get_gains(conf.BOOTSTRAP_RADIUS)
-    coords = []
+    west, east = bounds.west, bounds.east
+    bound = bool(bounds)
     for map_row, lat in enumerate(
-        float_range(conf.MAP_START[0], conf.MAP_END[0], lat_gain)
+        float_range(bounds.south, bounds.north, lat_gain)
     ):
-        row_start_lon = conf.MAP_START[1]
+        row_start_lon = west
         if map_row % 2 != 0:
             row_start_lon -= 0.5 * lon_gain
-        for map_col, lon in enumerate(
-            float_range(row_start_lon, conf.MAP_END[1], lon_gain)
-        ):
-            coords.append((lat, lon))
-    random.shuffle(coords)
+        for lon in float_range(row_start_lon, east, lon_gain):
+            point = lat, lon
+            if not bound or point in bounds:
+                coords.append(point)
+    shuffle(coords)
     return coords
 
 
@@ -198,17 +151,17 @@ def generate_device_info(account):
     ios10 = ('10.0', '10.0.1', '10.0.2', '10.0.3', '10.1', '10.1.1', '10.2', '10.2.1')
 
     devices = tuple(IPHONES.keys())
-    account['model'] = random.choice(devices)
+    account['model'] = choice(devices)
 
     account['id'] = uuid4().hex
 
     if account['model'] in ('iPhone9,1', 'iPhone9,2',
                             'iPhone9,3', 'iPhone9,4'):
-        account['iOS'] = random.choice(ios10)
+        account['iOS'] = choice(ios10)
     elif account['model'] in ('iPhone8,1', 'iPhone8,2', 'iPhone8,4'):
-        account['iOS'] = random.choice(ios9 + ios10)
+        account['iOS'] = choice(ios9 + ios10)
     else:
-        account['iOS'] = random.choice(ios8 + ios9 + ios10)
+        account['iOS'] = choice(ios8 + ios9 + ios10)
 
     return account
 
@@ -280,20 +233,20 @@ def accounts_from_csv(new_accounts, pickled_accounts):
 
 
 if conf.SPAWN_ID_INT:
-    def get_spawn_id(pokemon):
-        return int(pokemon['spawn_point_id'], 16)
+    def get_spawn_id(pokemon, _int=int):
+        return _int(pokemon['spawn_point_id'], 16)
 else:
     def get_spawn_id(pokemon):
         return pokemon['spawn_point_id']
 
 
-def get_current_hour(now=None):
-    now = now or time.time()
+def get_current_hour(now=None, _time=time):
+    now = now or _time()
     return round(now - (now % 3600))
 
 
-def time_until_time(seconds, seen=None):
-    current_seconds = seen or time.time() % 3600
+def time_until_time(seconds, seen=None, _time=time):
+    current_seconds = seen or _time() % 3600
     if current_seconds > seconds:
         return seconds + 3600 - current_seconds
     elif current_seconds + 3600 < seconds:
@@ -316,7 +269,7 @@ def load_pickle(name, raise_exception=False):
     location = join(conf.DIRECTORY, 'pickles', '{}.pickle'.format(name))
     try:
         with open(location, 'rb') as f:
-            return pickle.load(f)
+            return pickle_load(f)
     except (FileNotFoundError, EOFError):
         if raise_exception:
             raise FileNotFoundError
@@ -335,7 +288,7 @@ def dump_pickle(name, var):
 
     location = join(folder, '{}.pickle'.format(name))
     with open(location, 'wb') as f:
-        pickle.dump(var, f, pickle.HIGHEST_PROTOCOL)
+        pickle_dump(var, f, HIGHEST_PROTOCOL)
 
 
 def load_accounts():
@@ -369,11 +322,10 @@ def load_accounts_csv():
     return accounts
 
 
-@jit
-def randomize_point(point, amount=0.0003):
+def randomize_point(point, amount=0.0003, randomize=uniform):
     '''Randomize point, by up to ~47 meters by default.'''
     lat, lon = point
     return (
-        random.uniform(lat - amount, lat + amount),
-        random.uniform(lon - amount, lon + amount)
+        randomize(lat - amount, lat + amount),
+        randomize(lon - amount, lon + amount)
     )

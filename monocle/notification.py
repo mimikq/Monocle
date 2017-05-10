@@ -4,20 +4,20 @@ from math import sqrt
 from time import monotonic, time
 from pkg_resources import resource_stream
 from tempfile import TemporaryFile
-from asyncio import gather, TimeoutError
+from asyncio import gather, CancelledError, TimeoutError
 
-from aiohttp import ClientError, DisconnectedError, HttpProcessingError
+from aiohttp import ClientError, ClientResponseError, ServerTimeoutError
+from aiopogo import json_dumps, json_loads
 
 from .utils import load_pickle, dump_pickle
 from .db import session_scope, get_pokemon_ranking, estimate_remaining_time
-from .names import POKEMON_NAMES, POKEMON_MOVES
+from .names import MOVES, POKEMON
 from .shared import get_logger, SessionManager, LOOP, run_threaded
-
 from . import sanitized as conf
 
 
+WEBHOOK = False
 if conf.NOTIFY:
-    WEBHOOK = False
     TWITTER = False
     PUSHBULLET = False
     TELEGRAM = False
@@ -32,11 +32,12 @@ if conf.NOTIFY:
             from peony import PeonyClient
         except ImportError as e:
             raise ImportError("You specified a TWITTER_ACCESS_KEY but you don't have peony-twitter installed.") from e
+
         TWITTER=True
 
         if conf.TWEET_IMAGES:
-            if not conf.ENCOUNTER:
-                raise ValueError('You enabled TWEET_IMAGES but ENCOUNTER is not set.')
+            if conf.IMAGE_STATS and not conf.ENCOUNTER:
+                raise ValueError('You enabled TWEET_STATS but ENCOUNTER is not set.')
             try:
                 import cairo
             except ImportError as e:
@@ -50,14 +51,8 @@ if conf.NOTIFY:
         PUSHBULLET=True
 
     if conf.WEBHOOKS:
-        try:
-            import ujson as json
-            jargs = {'double_precision': 17}
-        except ImportError:
-            import json
-            jargs = {}
+        from aiopogo import json_dumps, json_loads
 
-        HEADERS = {'content-type': 'application/json'}
         if len(conf.WEBHOOKS) == 1:
             HOOK_POINT = next(iter(conf.WEBHOOKS))
             WEBHOOK = 1
@@ -101,20 +96,22 @@ class NotificationCache:
 
 
 class PokeImage:
-    def __init__(self, pokemon, move1, move2, time_of_day=0):
+    def __init__(self, pokemon, move1, move2, time_of_day=0, stats=conf.IMAGE_STATS):
         self.pokemon_id = pokemon['pokemon_id']
-        self.name = POKEMON_NAMES[self.pokemon_id]
-        try:
-            self.attack = pokemon['individual_attack']
-            self.defense = pokemon['individual_defense']
-            self.stamina = pokemon['individual_stamina']
-        except KeyError:
-            pass
-        self.move1 = move1
-        self.move2 = move2
+        self.name = POKEMON[self.pokemon_id]
         self.time_of_day = time_of_day
 
-    def create(self):
+        if stats:
+            try:
+                self.attack = pokemon['individual_attack']
+                self.defense = pokemon['individual_defense']
+                self.stamina = pokemon['individual_stamina']
+            except KeyError:
+                pass
+            self.move1 = move1
+            self.move2 = move2
+
+    def create(self, stats=conf.IMAGE_STATS):
         if self.time_of_day > 1:
             bg = resource_stream('monocle', 'static/monocle-icons/assets/notification-bg-night.png')
         else:
@@ -122,21 +119,22 @@ class PokeImage:
         ims = cairo.ImageSurface.create_from_png(bg)
         self.context = cairo.Context(ims)
         pokepic = resource_stream('monocle', 'static/monocle-icons/original-icons/{}.png'.format(self.pokemon_id))
-        self.draw_stats()
+        if stats:
+            self.draw_stats()
         self.draw_image(pokepic, 204, 224)
-        self.draw_name()
+        self.draw_name(50 if stats else 120)
         image = TemporaryFile(suffix='.png')
         ims.write_to_png(image)
         return image
 
-    def draw_stats(self):
+    def draw_stats(self, iv_font=conf.IV_FONT, move_font=conf.MOVE_FONT):
         """Draw the Pokemon's IV's and moves."""
 
         self.context.set_line_width(1.75)
         text_x = 240
 
         try:
-            self.context.select_font_face(conf.IV_FONT or "monospace")
+            self.context.select_font_face(conf.IV_FONT)
             self.context.set_font_size(22)
 
             # black stroke
@@ -153,7 +151,7 @@ class PokeImage:
             pass
 
         if self.move1 or self.move2:
-            self.context.select_font_face(conf.MOVE_FONT or "sans-serif")
+            self.context.select_font_face(conf.MOVE_FONT)
             self.context.set_font_size(16)
 
             # black stroke
@@ -188,8 +186,8 @@ class PokeImage:
         # calculate proportional scaling
         img_height = ims.get_height()
         img_width = ims.get_width()
-        width_ratio = float(width) / float(img_width)
-        height_ratio = float(height) / float(img_height)
+        width_ratio = width / img_width
+        height_ratio = height / img_height
         scale_xy = min(height_ratio, width_ratio)
         # scale image and add it
         self.context.save()
@@ -211,12 +209,12 @@ class PokeImage:
         self.context.paint()
         self.context.restore()
 
-    def draw_name(self):
+    def draw_name(self, pos, font=conf.NAME_FONT):
         """Draw the Pokemon's name."""
         self.context.set_line_width(2.5)
         text_x = 240
-        text_y = 50
-        self.context.select_font_face(conf.NAME_FONT or "sans-serif")
+        text_y = pos
+        self.context.select_font_face(font)
         self.context.set_font_size(32)
         self.context.move_to(text_x, text_y)
         self.context.set_source_rgba(0, 0, 0)
@@ -230,21 +228,18 @@ class PokeImage:
 class Notification:
     def __init__(self, pokemon, score, time_of_day):
         self.pokemon = pokemon
-        self.name = POKEMON_NAMES[pokemon['pokemon_id']]
+        self.name = POKEMON[pokemon['pokemon_id']]
         self.coordinates = pokemon['lat'], pokemon['lon']
         self.score = score
         self.time_of_day = time_of_day
         self.log = get_logger('notifier')
         self.description = 'wild'
         try:
-            _m1 = pokemon['move_1']
-            _m2 = pokemon['move_2']
+            self.move1 = MOVES[pokemon['move_1']]
+            self.move2 = MOVES[pokemon['move_2']]
         except KeyError:
             self.move1 = None
             self.move2 = None
-        else:
-            self.move1 = POKEMON_MOVES.get(_m1, _m1)
-            self.move2 = POKEMON_MOVES.get(_m2, _m2)
 
         try:
             if self.score == 1:
@@ -357,24 +352,17 @@ class Notification:
 
         try:
             async with session.post(TELEGRAM_BASE_URL, data=payload) as resp:
-                try:
-                    resp.raise_for_status()
-                except HttpProcessingError as e:
-                    try:
-                        response = await resp.json()
-                        self.log.error('Error {} from Telegram: {}', e.code, response['description'])
-                    except Exception:
-                        self.log.error('Error {} from Telegram: {}', e.code, e.message)
-                    return False
                 self.log.info('Sent a Telegram notification about {}.', self.name)
                 return True
-        except (ClientError, DisconnectedError) as e:
-            err = e.__cause__ or e
-            self.log.error('{} during Telegram notification.', err.__class__.__name__)
-            return False
+        except ClientResponseError as e:
+            self.log.error('Error {} from Telegram: {}', e.code, e.message)
+        except ClientError as e:
+            self.log.error('{} during Telegram notification.', e.__class__.__name__)
+        except CancelledError:
+            raise
         except Exception:
             self.log.exception('Exception caught in Telegram notification.')
-            return False
+        return False
 
     async def pbpush(self):
         """ Send a PushBullet notification either privately or to a channel,
@@ -687,7 +675,7 @@ class Notifier:
         notified = False
 
         pokemon_id = pokemon['pokemon_id']
-        name = POKEMON_NAMES[pokemon_id]
+        name = POKEMON[pokemon_id]
 
         encounter_id = pokemon['encounter_id']
         if encounter_id in self.cache:
@@ -724,7 +712,7 @@ class Notifier:
             try:
                 self.log.info("{}'s score was {:.3f} (iv: {:.3f}),"
                                  " but {:.3f} was required.",
-                                 name, score, iv_score, score_required)
+                                 name, score, iv_score if iv_score is not None else -1, score_required)
             except TypeError:
                 pass
             return False
@@ -796,12 +784,14 @@ class Notifier:
             data['message']['individual_stamina'] = pokemon['individual_stamina']
             data['message']['move_1'] = pokemon['move_1']
             data['message']['move_2'] = pokemon['move_2']
+            data['message']['height'] = pokemon['height']
+            data['message']['weight'] = pokemon['weight']
+            data['message']['gender'] = pokemon['gender']
         except KeyError:
             pass
 
-        payload = json.dumps(data, **jargs)
         session = SessionManager.get()
-        return await self.wh_send(session, payload)
+        return await self.wh_send(session, data)
 
     if WEBHOOK > 1:
         async def wh_send(self, session, payload):
@@ -811,23 +801,18 @@ class Notifier:
         async def wh_send(self, session, payload):
             return await self.hook_post(HOOK_POINT, session, payload)
 
-    async def hook_post(self, w, session, payload):
+    async def hook_post(self, w, session, payload, headers={'content-type': 'application/json'}):
         try:
-            async with session.post(w, data=payload, timeout=3, headers=HEADERS) as resp:
-                resp.raise_for_status()
+            async with session.post(w, json=payload, timeout=4, headers=headers) as resp:
                 return True
-        except HttpProcessingError as e:
+        except ClientResponseError as e:
             self.log.error('Error {} from webook {}: {}', e.code, w, e.message)
-            return False
-        except TimeoutError:
+        except (TimeoutError, ServerTimeoutError):
             self.log.error('Response timeout from webhook: {}', w)
-            return False
-        except (ClientError, DisconnectedError) as e:
-            err = e.__cause__ or e
-            self.log.error('{} on webhook: {}', err.__class__.__name__, w)
-            return False
+        except ClientError as e:
+            self.log.error('{} on webhook: {}', e.__class__.__name__, w)
         except CancelledError:
             raise
         except Exception:
             self.log.exception('Error from webhook: {}', w)
-            return False
+        return False
