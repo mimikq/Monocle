@@ -266,10 +266,12 @@ function addPokestopsToMap (data, map) {
         if (item.lure_expiration != 0) {
             icon = new PokestopLuredIcon();
         }
-        var marker = L.marker([item.lat, item.lon], {icon: icon});
+        var marker = L.marker([item[1], item[2]], {icon: icon});
         marker.raw = item;
-        marker.bindPopup('<b>Pokestop: ' + item.external_id + '</b>' +
-                         '<br>=&gt; <a href=https://www.google.com/maps/?daddr='+ item.lat + ','+ item.lon +' target="_blank" title="See in Google Maps">Get directions</a>');
+        marker.bindPopup(
+            '<b>Pokestop: ' + item[0] + '</b>' +
+            '<br>=&gt; <a href=https://www.google.com/maps/?daddr=' + item[1] + ',' + item[2] +
+            ' target="_blank" title="See in Google Maps">Get directions</a>');
         marker.addTo(overlays.Pokestops);
     });
 }
@@ -391,6 +393,7 @@ map.whenReady(function () {
     getPokemon();
     setInterval(getPokemon, 30000);
     setInterval(getGyms, 110000)
+    setInterval(getPokestops, 110000)
 });
 
 $("#settings>ul.nav>li>a").on('click', function(){

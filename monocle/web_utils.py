@@ -168,18 +168,6 @@ else:
                        conf.MAP_END, (conf.MAP_END[0], conf.MAP_START[1]), conf.MAP_START)
         },)
 
-
-def get_pokestop_markers():
-    with session_scope() as session:
-        pokestops = session.query(Pokestop)
-        return [{
-            'external_id': pokestop.external_id,
-            'lat': pokestop.lat,
-            'lon': pokestop.lon,
-            'lure_expiration': pokestop.lure_expiration
-        } for pokestop in pokestops]
-
-
 def sighting_to_report_marker(sighting):
     return {
         'icon': 'static/monocle-icons/icons/{}.png'.format(sighting.pokemon_id),
