@@ -1221,7 +1221,7 @@ class Worker:
     @staticmethod
     def normalize_pokestop(raw):
         lure_expiration = 0
-        if 'lure_info' in raw:
+        if 'active_fort_modifier' in raw:
             lure_expiration = (raw['last_modified_timestamp_ms'] // 1000) + 1800
         return {
             'type': 'pokestop',

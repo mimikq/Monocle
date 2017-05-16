@@ -263,13 +263,16 @@ function addSpawnsToMap (data, map) {
 function addPokestopsToMap (data, map) {
     data.forEach(function (item) {
         var icon = new PokestopIcon();
-        if (item.lure_expiration != 0) {
+        var expireDate = "";
+        if (item[3] != 0) {
             icon = new PokestopLuredIcon();
+            var expiration = new Date(item[3] * 1000);
+            expireDate = expiration.getHours() + ":" + expiration.getMinutes();
         }
         var marker = L.marker([item[1], item[2]], {icon: icon});
         marker.raw = item;
         marker.bindPopup(
-            '<b>Pokestop: ' + item[0] + '</b>' +
+            '<b>Pokestop: ' + expireDate + '</b>' +
             '<br>=&gt; <a href=https://www.google.com/maps/?daddr=' + item[1] + ',' + item[2] +
             ' target="_blank" title="See in Google Maps">Get directions</a>');
         marker.addTo(overlays.Pokestops);
