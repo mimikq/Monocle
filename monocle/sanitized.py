@@ -4,11 +4,63 @@ from numbers import Number
 from pathlib import Path
 from datetime import datetime
 from logging import getLogger
+from argparse import ArgumentParser
+from ast import literal_eval
 
 try:
     from . import config
 except ImportError as e:
-    raise ImportError('Please copy config.example.py to config.py and customize it.') from e
+    print('pas de config')
+    parser = ArgumentParser()
+    parser.add_argument(
+        '--GRID',
+        dest='GRID',
+        help='GRID',
+        default="(1,1)",
+        required=True
+    )
+    parser.add_argument(
+        '--MAP_START',
+        dest='MAP_START',
+        help='MAP_START',
+        required=True
+    )
+    parser.add_argument(
+        '--MAP_END',
+        dest='MAP_END',
+        help='MAP_END',
+        required=True
+    )
+    parser.add_argument(
+        '--ACCOUNTS',
+        dest='ACCOUNTS',
+        help='ACCOUNTS',
+        required=True
+    )
+    parser.add_argument(
+        '--DB_ENGINE',
+        dest='DB_ENGINE',
+        help='DB_ENGINE',
+        required=True
+    )
+    parser.add_argument(
+        '--PROXIES',
+        dest='PROXIES',
+        help='PROXIES',
+        required=True
+    )
+    parser.add_argument(
+        '--HASH_KEY',
+        dest='HASH_KEY',
+        help='HASH_KEY',
+        required=True
+    )
+    config = parser.parse_args()
+    config.GRID = literal_eval(config.GRID)
+    config.MAP_START = literal_eval(config.MAP_START)
+    config.MAP_END = literal_eval(config.MAP_END)
+    config.ACCOUNTS = literal_eval(config.ACCOUNTS)
+    config.PROXIES = literal_eval(config.PROXIES)
 
 sequence = (tuple, list)
 path = (str, Path)

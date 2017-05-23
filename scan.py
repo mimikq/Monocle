@@ -100,6 +100,49 @@ def parse_args():
         help='Do not load spawns from pickle',
         action='store_false'
     )
+    parser.add_argument(
+        '--GRID',
+        dest='GRID',
+        help='GRID',
+        default="(1,1)",
+        required=True
+    )
+    parser.add_argument(
+        '--MAP_START',
+        dest='MAP_START',
+        help='MAP_START',
+        required=True
+    )
+    parser.add_argument(
+        '--MAP_END',
+        dest='MAP_END',
+        help='MAP_END',
+        required=True
+    )
+    parser.add_argument(
+        '--ACCOUNTS',
+        dest='ACCOUNTS',
+        help='ACCOUNTS',
+        required=True
+    )
+    parser.add_argument(
+        '--DB_ENGINE',
+        dest='DB_ENGINE',
+        help='DB_ENGINE',
+        required=True
+    )
+    parser.add_argument(
+        '--PROXIES',
+        dest='PROXIES',
+        help='PROXIES',
+        required=True
+    )
+    parser.add_argument(
+        '--HASH_KEY',
+        dest='HASH_KEY',
+        help='HASH_KEY',
+        required=True
+    )
     return parser.parse_args()
 
 
