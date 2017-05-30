@@ -789,3 +789,17 @@ def get_all_spawn_coords(session, pokemon_id=None):
     if conf.REPORT_SINCE:
         points = points.filter(Sighting.expire_timestamp > SINCE_TIME)
     return points.all()
+
+def get_top_pokemons_by_spawnpoint(session):
+    query = session.execute('''
+        select spawn_id, despawn_time, lat, lon, duration, pokemon_id, max(number)
+        from (
+            select sightings.spawn_id, spawnpoints.despawn_time, spawnpoints.lat, spawnpoints.lon, spawnpoints.duration, sightings.pokemon_id, count(pokemon_id) as number
+            from sightings, spawnpoints
+            where sightings.spawn_id = spawnpoints.spawn_id
+            group by spawn_id, pokemon_id
+            order by spawn_id, number desc
+        ) test
+        group by spawn_id
+    ''')
+    return query

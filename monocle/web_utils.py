@@ -4,7 +4,7 @@ from multiprocessing.managers import BaseManager, RemoteError
 from time import time
 
 from monocle import sanitized as conf
-from monocle.db import get_forts, Pokestop, session_scope, Sighting, Spawnpoint
+from monocle.db import get_forts, get_top_pokemon_by_spawnpoint, Pokestop, session_scope, Sighting, Spawnpoint
 from monocle.utils import Units, get_address
 from monocle.names import DAMAGE, MOVES, POKEMON
 
@@ -135,14 +135,19 @@ def get_gym_markers(names=POKEMON):
 
 def get_spawnpoint_markers():
     with session_scope() as session:
-        spawns = session.query(Spawnpoint)
-        return [{
-            'spawn_id': spawn.spawn_id,
-            'despawn_time': spawn.despawn_time,
-            'lat': spawn.lat,
-            'lon': spawn.lon,
-            'duration': spawn.duration
-        } for spawn in spawns]
+        stat_spawns = get_top_pokemon_by_spawnpoint(session)
+        spawn_list = []
+        for stat in stat_spawns:
+            if stat.spawn_id != -1:
+                spawn_list.append({
+                    'spawn_id': stat.spawn_id,
+                    'despawn_time': stat.despawn_time,
+                    'lat': stat.lat,
+                    'lon': stat.lon,
+                    'duration': stat.duration,
+                    'top': stat.pokemon_id
+                })
+        return spawn_list
 
 if conf.BOUNDARIES:
     from shapely.geometry import mapping
