@@ -790,7 +790,7 @@ def get_all_spawn_coords(session, pokemon_id=None):
         points = points.filter(Sighting.expire_timestamp > SINCE_TIME)
     return points.all()
 
-def get_top_pokemons_by_spawnpoint(session):
+def get_top_pokemon_by_spawnpoint(session):
     query = session.execute('''
         select spawn_id, despawn_time, lat, lon, duration, pokemon_id, max(number)
         from (
