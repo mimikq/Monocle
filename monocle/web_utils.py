@@ -4,7 +4,7 @@ from multiprocessing.managers import BaseManager, RemoteError
 from time import time
 
 from monocle import sanitized as conf
-from monocle.db import get_forts, Pokestop, session_scope, Sighting, Spawnpoint, Raid, Fort
+from monocle.db import get_forts, Pokestop, session_scope, Sighting, Spawnpoint, Raid, Fort, FortSighting
 from monocle.utils import Units, get_address
 from monocle.names import DAMAGE, MOVES, POKEMON
 
@@ -128,9 +128,14 @@ def get_raid_markers(names=POKEMON):
             fort = session.query(Fort) \
                 .filter(Fort.external_id == fort_id) \
                 .scalar()
+            fortsighting = session.query(FortSighting) \
+                .filter(FortSighting.fort_id == fort.id) \
+                .order_by(FortSighting.last_modified.desc()) \
+                .first()
             markers.append({
                 'id': 'raid-' + str(raid.id),
                 'level': raid.level,
+                'team': fortsighting.team,
                 'pokemon_id': raid.pokemon_id,
                 'pokemon_name': names[raid.pokemon_id],
                 'lat': fort.lat,

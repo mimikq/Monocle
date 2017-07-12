@@ -310,6 +310,11 @@ MINIMUM_SCORE = 0.4  # the required score after FULL_TIME seconds have passed
 #TELEGRAM_BOT_TOKEN = '123456789:AA12345qT6QDd12345RekXSQeoZBXVt-AAA'
 #TELEGRAM_CHAT_ID = '@your_channel'
 
+NOTIFY_RAIDS = False  # enable raid notifications
+RAIDS_LVL_MIN = 4
+#RAIDS_IDS = (143, 248)
+RAIDS_DISCORD_URL = "https://discordapp.com/api/webhooks/xxxxxxxxxxxx/xxxxxxxxxxxx"
+
 #WEBHOOKS = {'http://127.0.0.1:4000'}
 
 

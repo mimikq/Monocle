@@ -16,7 +16,7 @@ from .utils import round_coords, load_pickle, get_device_info, get_start_coords,
 from .shared import get_logger, LOOP, SessionManager, run_threaded, ACCOUNTS
 from . import altitudes, avatar, bounds, db_proc, spawns, sanitized as conf
 
-if conf.NOTIFY:
+if conf.NOTIFY or conf.NOTIFY_RAIDS:
     from .notification import Notifier
 
 if conf.CACHE_CELLS:
@@ -77,7 +77,7 @@ class Worker:
     else:
         proxies = None
 
-    if conf.NOTIFY:
+    if conf.NOTIFY or conf.NOTIFY_RAIDS:
         notifier = Notifier()
 
     def __init__(self, worker_no):
@@ -185,7 +185,7 @@ class Worker:
             raise err
 
         self.error_code = '°'
-        version = 6701
+        version = 6702
         async with self.sim_semaphore:
             self.error_code = 'APP SIMULATION'
             if conf.APP_SIMULATION:
@@ -596,9 +596,9 @@ class Worker:
             else:
                 if (not dl_hash
                         and conf.FORCED_KILL
-                        and dl_settings.settings.minimum_client_version != '0.67.1'):
+                        and dl_settings.settings.minimum_client_version != '0.67.2'):
                     forced_version = StrictVersion(dl_settings.settings.minimum_client_version)
-                    if forced_version > StrictVersion('0.67.1'):
+                    if forced_version > StrictVersion('0.67.2'):
                         err = '{} is being forced, exiting.'.format(forced_version)
                         self.log.error(err)
                         print(err)
@@ -731,7 +731,7 @@ class Worker:
         return False
 
     async def visit_point(self, point, spawn_id, bootstrap,
-            encounter_conf=conf.ENCOUNTER, notify_conf=conf.NOTIFY,
+            encounter_conf=conf.ENCOUNTER, notify_conf=conf.NOTIFY or conf.NOTIFY_RAIDS,
             more_points=conf.MORE_POINTS):
         self.handle.cancel()
         self.error_code = '∞' if bootstrap else '!'
@@ -834,9 +834,11 @@ class Worker:
                     if fort not in FORT_CACHE:
                         db_proc.add(self.normalize_gym(fort))
                     if fort.HasField('raid_info'):
-                        print('raid found')
                         if fort not in RAID_CACHE:
-                            db_proc.add(self.normalize_raid(fort))
+                            if notify_conf:
+                                LOOP.create_task(self.notifier.notify_raid(fort))
+                            raid = self.normalize_raid(fort)
+                            db_proc.add(raid)
 
             if more_points:
                 try:

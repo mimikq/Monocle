@@ -754,6 +754,48 @@ class Notifier:
         else:
             return self.cleanup(encounter_id, cache_handle)
 
+    async def notify_raid(self, fort):
+        raid = fort.raid_info
+
+        if raid.raid_level < conf.RAID_LVL_MIN:
+            return
+        else if raid.raid_pokemon.pokemon_id not in conf.RAID_IDS:
+            return
+
+        tth = raid.raid_battle_ms // 1000 if raid.raid_pokemon.pokemon_id == 0 else raid.raid_end_ms // 1000
+        timer_end = datetime.fromtimestamp(tth, None)
+        time_left = timedelta(tth - time())
+
+        payload = {
+            'username': 'Egg' if raid.raid_pokemon.pokemon_id == 0 else POKEMON[raid.raid_pokemon.pokemon_id],
+            'embeds': [{
+                'title': 'Raid{}'.format(raid.raid_level),
+                'url': self.get_gmaps_link(fort.latitude, fort.longitude),
+                'description': '{} ({}mn {}s)'.format(timer_end.strftime("%H:%M:%S"), time_left.seconds // 60, time_left.seconds % 60),
+                'thumbnail': {'url': "https://raw.githubusercontent.com/Imaginum/monocle-icons/larger-outlined/larger-icons/{}.png".format(raid.raid_pokemon.pokemon_id)},
+                'image': {'url': self.get_static_map_url(fort.latitude, fort.longitude)}
+            }]
+        }
+
+        session = SessionManager.get()
+        await self.hook_post(conf.RAID_DISCORD_WEBHOOK, session, payload)
+
+    def get_gmaps_link(self, lat, lng):
+        return 'http://maps.google.com/maps?q={},{}'.format(repr(lat), repr(lng))
+
+    def get_static_map_url(self, lat, lng):
+        center = '{},{}'.format(lat, lng)
+        query_center = 'center={}'.format(center)
+        query_markers = 'markers=color:red%7C{}'.format(center)
+        query_size = 'size={}x{}'.format('250', '125')
+        query_zoom = 'zoom={}'.format('15')
+        query_maptype = 'maptype={}'.format('roadmap')
+
+        url = ('https://maps.googleapis.com/maps/api/staticmap?' +
+                query_center + '&' + query_markers + '&' +
+                query_maptype + '&' + query_size + '&' + query_zoom)
+        return url
+
     async def webhook(self, pokemon):
         """ Send a notification via webhook
         """

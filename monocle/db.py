@@ -180,10 +180,12 @@ class RaidCache:
     def __contains__(self, raw_fort):
         try:
             raid = self.store[raw_fort.id]
-            return (
-                raid['time_end'] > raw_fort.raid_info.raid_end_ms // 1000 - 2 and
-                raid['time_end'] < raw_fort.raid_info.raid_end_ms // 1000 + 2 and
-                raid['pokemon_id'] != raw_fort.raid_info.raid_pokemon.pokemon_id)
+            if raw_fort.raid_info.raid_pokemon:
+                return (
+                    raid['time_end'] > raw_fort.raid_info.raid_end_ms // 1000 - 2 and
+                    raid['time_end'] < raw_fort.raid_info.raid_end_ms // 1000 + 2 and
+                    raid['pokemon_id'] == raw_fort.raid_info.raid_pokemon.pokemon_id)
+            return True
         except KeyError:
             return False
 
