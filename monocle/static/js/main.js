@@ -131,6 +131,8 @@ function getRaidPopupContent (raw) {
     	var seconds = parseInt(diff - (minutes * 60));
 		content += 'Raid Battle: ' + minutes + 'm ' + seconds + 's<br>';
 	}else{
+        content += 'Move 1: ' + raw.move1 + '<br>';
+        content += 'Move 2: ' + raw.move2 + '<br>';
 		var diff = (raw.time_end - new Date().getTime() / 1000);
 		var minutes = parseInt(diff / 60);
     	var seconds = parseInt(diff - (minutes * 60));

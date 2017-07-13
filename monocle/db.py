@@ -279,6 +279,8 @@ class Raid(Base):
     fort_id = Column(Integer, ForeignKey('forts.id'))
     level = Column(TINY_TYPE)
     pokemon_id = Column(TINY_TYPE)
+    move_1 = Column(SmallInteger)
+    move_2 = Column(SmallInteger)
     time_spawn = Column(Integer, index=True)
     time_battle = Column(Integer)
     time_end = Column(Integer)
@@ -547,18 +549,19 @@ def add_raid(session, raw_raid):
     if raid:
         if raid.pokemon_id == 0 and raw_raid['pokemon_id'] != 0:
             raid.pokemon_id = raw_raid['pokemon_id']
-            RAID_CACHE.add(raw_raid)
-            return
-        else:
-            # Why is it not in the cache? It should be there!
-            RAID_CACHE.add(raw_raid)
-            return
+            raid.move_1 = raw_raid['move_1']
+            raid.move_2 = raw_raid['move_2']
+        # Why is it not in the cache? It should be there!
+        RAID_CACHE.add(raw_raid)
+        return
 
     raid = Raid(
         external_id=raw_raid['external_id'],
         fort_id=raw_raid['fort_id'],
         level=raw_raid['level'],
         pokemon_id=raw_raid['pokemon_id'],
+        move_1=raw_raid['move_1'],
+        move_2=raw_raid['move_2'],
         time_spawn=raw_raid['time_spawn'],
         time_battle=raw_raid['time_battle'],
         time_end=raw_raid['time_end']

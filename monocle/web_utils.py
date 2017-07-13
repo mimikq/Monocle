@@ -118,7 +118,7 @@ def get_pokemarkers(after_id=0):
         return tuple(map(sighting_to_marker, pokemons))
 
 
-def get_raid_markers(names=POKEMON):
+def get_raid_markers(names=POKEMON, moves=MOVES):
     with session_scope() as session:
         markers = []
         raids = session.query(Raid) \
@@ -138,6 +138,8 @@ def get_raid_markers(names=POKEMON):
                 'team': fortsighting.team,
                 'pokemon_id': raid.pokemon_id,
                 'pokemon_name': names[raid.pokemon_id],
+                'move1': moves[raid.move_1],
+                'move2': moves[raid.move_2],
                 'lat': fort.lat,
                 'lon': fort.lon,
                 'time_spawn': raid.time_spawn,
