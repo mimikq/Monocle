@@ -757,10 +757,9 @@ class Notifier:
     async def notify_raid(self, fort):
         raid = fort.raid_info
 
-        if raid.raid_level < conf.RAID_LVL_MIN:
-            return
-        else if raid.raid_pokemon.pokemon_id not in conf.RAID_IDS:
-            return
+        if raid.raid_pokemon.pokemon_id not in conf.RAIDS_IDS:
+            if raid.raid_level < conf.RAIDS_LVL_MIN:
+                return
 
         tth = raid.raid_battle_ms // 1000 if raid.raid_pokemon.pokemon_id == 0 else raid.raid_end_ms // 1000
         timer_end = datetime.fromtimestamp(tth, None)
@@ -778,7 +777,7 @@ class Notifier:
         }
 
         session = SessionManager.get()
-        await self.hook_post(conf.RAID_DISCORD_WEBHOOK, session, payload)
+        await self.hook_post(conf.RAIDS_DISCORD_URL, session, payload)
 
     def get_gmaps_link(self, lat, lng):
         return 'http://maps.google.com/maps?q={},{}'.format(repr(lat), repr(lng))
