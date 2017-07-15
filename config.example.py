@@ -312,7 +312,7 @@ MINIMUM_SCORE = 0.4  # the required score after FULL_TIME seconds have passed
 
 NOTIFY_RAIDS = False  # enable raid notifications
 RAIDS_LVL_MIN = 4
-#RAIDS_IDS = (143, 248)
+#RAIDS_IDS = {143, 248}
 RAIDS_DISCORD_URL = "https://discordapp.com/api/webhooks/xxxxxxxxxxxx/xxxxxxxxxxxx"
 
 #WEBHOOKS = {'http://127.0.0.1:4000'}
