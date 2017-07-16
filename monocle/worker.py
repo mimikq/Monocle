@@ -731,7 +731,7 @@ class Worker:
         return False
 
     async def visit_point(self, point, spawn_id, bootstrap,
-            encounter_conf=conf.ENCOUNTER, notify_conf=conf.NOTIFY or conf.NOTIFY_RAIDS,
+            encounter_conf=conf.ENCOUNTER, notify_conf=conf.NOTIFY,
             more_points=conf.MORE_POINTS):
         self.handle.cancel()
         self.error_code = '∞' if bootstrap else '!'
@@ -835,7 +835,7 @@ class Worker:
                         db_proc.add(self.normalize_gym(fort))
                     if fort.HasField('raid_info'):
                         if fort not in RAID_CACHE:
-                            if notify_conf:
+                            if conf.NOTIFY_RAIDS:
                                 LOOP.create_task(self.notifier.notify_raid(fort))
                             raid = self.normalize_raid(fort)
                             db_proc.add(raid)
