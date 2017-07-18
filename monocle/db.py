@@ -343,6 +343,7 @@ class Fort(Base):
 
     raids = relationship(
         'Raid',
+        backref='fort',
         order_by='Raid.time_end'
     )
 
@@ -549,9 +550,11 @@ def add_fort_sighting(session, raw_fort):
 
 def add_raid(session, raw_raid):
     fort = session.query(Fort) \
+        .filter(Fort.external_id == raw_raid['fort_external_id']) \
         .first()
     if not fort:
         fort = Fort(
+            external_id=raw_raid['fort_external_id'],
             lat=raw_raid['lat'],
             lon=raw_raid['lon'],
         )
@@ -571,6 +574,7 @@ def add_raid(session, raw_raid):
 
     raid = Raid(
         external_id=raw_raid['external_id'],
+        fort=fort,
         level=raw_raid['level'],
         pokemon_id=raw_raid['pokemon_id'],
         move_1=raw_raid['move_1'],
