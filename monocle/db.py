@@ -168,8 +168,8 @@ class RaidCache:
         return len(self.store)
 
     def add(self, raid):
-        self.store[raid['fort_id']] = raid
-        call_at(raid['time_end'], self.remove, raid['fort_id'])
+        self.store[raid['external_id']] = raid
+        call_at(raid['time_end'], self.remove, raid['external_id'])
 
     def remove(self, cache_id):
         try:
@@ -339,6 +339,11 @@ class Fort(Base):
         'FortSighting',
         backref='fort',
         order_by='FortSighting.last_modified'
+    )
+
+    raids = relationship(
+        'Raid',
+        order_by='Raid.time_end'
     )
 
 
@@ -543,10 +548,19 @@ def add_fort_sighting(session, raw_fort):
 
 
 def add_raid(session, raw_raid):
+    fort = session.query(Fort) \
+        .first()
+    if not fort:
+        fort = Fort(
+            lat=raw_raid['lat'],
+            lon=raw_raid['lon'],
+        )
+        session.add(fort)
+
     raid = session.query(Raid) \
         .filter(Raid.external_id == raw_raid['external_id']) \
         .first()
-    if raid:
+    if fort.id and raid:
         if raid.pokemon_id == 0 and raw_raid['pokemon_id'] != 0:
             raid.pokemon_id = raw_raid['pokemon_id']
             raid.move_1 = raw_raid['move_1']
@@ -557,7 +571,6 @@ def add_raid(session, raw_raid):
 
     raid = Raid(
         external_id=raw_raid['external_id'],
-        fort_id=raw_raid['fort_id'],
         level=raw_raid['level'],
         pokemon_id=raw_raid['pokemon_id'],
         move_1=raw_raid['move_1'],
@@ -661,7 +674,7 @@ def _get_forts(session):
             fs.last_modified,
             f.lat,
             f.lon,
-            f.slots_available
+            fs.slots_available
         FROM fort_sightings fs
         JOIN forts f ON f.id=fs.fort_id
         WHERE (fs.fort_id, fs.last_modified) IN (

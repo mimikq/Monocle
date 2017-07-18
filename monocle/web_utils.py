@@ -124,9 +124,8 @@ def get_raid_markers(names=POKEMON, moves=MOVES):
         raids = session.query(Raid) \
             .filter(Raid.time_end > time())
         for raid in raids:
-            fort_id = raid.fort_id
             fort = session.query(Fort) \
-                .filter(Fort.external_id == fort_id) \
+                .filter(Fort.id == raid.fort_id) \
                 .scalar()
             fortsighting = session.query(FortSighting) \
                 .filter(FortSighting.fort_id == fort.id) \

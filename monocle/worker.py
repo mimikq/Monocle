@@ -1279,7 +1279,9 @@ class Worker:
         return {
             'type': 'raid',
             'external_id': raw.raid_info.raid_seed,
-            'fort_id': raw.id,
+            'fort_external_id': raw.id
+            'lat': raw.latitude,
+            'lon': raw.longitude,
             'level': raw.raid_info.raid_level,
             'pokemon_id': raw.raid_info.raid_pokemon.pokemon_id if raw.raid_info.raid_pokemon else 0,
             'move_1': raw.raid_info.raid_pokemon.move_1 if raw.raid_info.raid_pokemon else 0,
