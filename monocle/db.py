@@ -168,8 +168,8 @@ class RaidCache:
         return len(self.store)
 
     def add(self, raid):
-        self.store[raid['external_id']] = raid
-        call_at(raid['time_end'], self.remove, raid['external_id'])
+        self.store[raid['fort_external_id']] = raid
+        call_at(raid['time_end'], self.remove, raid['fort_external_id'])
 
     def remove(self, cache_id):
         try:

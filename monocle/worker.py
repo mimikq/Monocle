@@ -1279,7 +1279,7 @@ class Worker:
         return {
             'type': 'raid',
             'external_id': raw.raid_info.raid_seed,
-            'fort_external_id': raw.id
+            'fort_external_id': raw.id,
             'lat': raw.latitude,
             'lon': raw.longitude,
             'level': raw.raid_info.raid_level,
