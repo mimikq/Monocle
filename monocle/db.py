@@ -889,3 +889,17 @@ def get_all_spawn_coords(session, pokemon_id=None):
     if conf.REPORT_SINCE:
         points = points.filter(Sighting.expire_timestamp > SINCE_TIME)
     return points.all()
+
+# Preloading from db
+with session_scope() as session:
+    raids = session.query(Raid) \
+        .filter(Raid.time_end > time())
+    for raid in raids:
+        fort = session.query(Fort) \
+            .filter(Fort.id == raid.fort_id) \
+            .scalar()
+        r = {}
+        r['fort_external_id'] = fort.external_id
+        r['time_end'] = raid.time_end
+        r['pokemon_id'] = raid.pokemon_id
+        RAID_CACHE.add(r)
