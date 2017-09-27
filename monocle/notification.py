@@ -841,7 +841,7 @@ class Notifier:
         center = '{},{}'.format(lat, lng)
         query_center = 'center={}'.format(center)
         query_markers = 'markers=color:red%7C{}'.format(center)
-        query_size = 'size={}x{}'.format('250', '125')
+        query_size = 'size={}x{}'.format('500', '250')
         query_zoom = 'zoom={}'.format('15')
         query_maptype = 'maptype={}'.format('roadmap')
 
